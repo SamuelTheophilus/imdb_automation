@@ -1,0 +1,23 @@
+[project]
+name = "v-jepa"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "bcrypt>=5.0.0",
+    "instructor>=1.15.1",
+    "jinja2>=3.1.6",
+    "nicegui>=3.12.1",
+    "ollama>=0.6.2",
+    "openpyxl>=3.1.5",
+    "pandas>=3.0.3",
+    "pillow>=12.2.0",
+    "pydantic>=2.13.4",
+    "python-jose>=3.5.0",
+    "python-dotenv>=1.2.2",
+    "pyzbar>=0.1.9",
+    "rapidfuzz>=3.14.5",
+    "scikit-learn>=1.8.0",
+    "tabulate>=0.10.0",
+]
