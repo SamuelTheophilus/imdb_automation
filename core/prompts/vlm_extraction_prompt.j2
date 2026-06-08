@@ -1,0 +1,45 @@
+Return one JSON object. No prose. No analysis.
+
+The object must have exactly one key: items.
+items must be an array with one object per image.
+
+For each image object, use exactly these keys:
+image_path, tag_text, category_type, manufacturer, brand, product_name, weight, unit, packaging_type, country_of_origin, promotional_messages, variant, fragrance_flavor, addons, tagline.
+
+Rules:
+- Set image_path to the exact Image Path provided before that image.
+- Do not extract barcode. Barcode is decoded separately after grouping.
+- tag_text is the dataset label printed around the image border, often beginning with GH. Copy it exactly enough for grouping.
+- category_type: short product type, e.g. MARGARINE, MAYONNAISE, BUTTER, JUICE.
+- variant: product variant if visible, e.g. ORIGINAL, LOW FAT. Use null if not on label.
+- fragrance_flavor: flavor or fragrance if visible, e.g. RICH, VANILLA. Use null if not on label.
+- addons: extra pack contents if mentioned, e.g. SPOON INCLUDED. Use null if absent.
+- tagline: short promotional or descriptive tagline if visible. Use null if absent.
+- promotional_messages: on-pack promotion text, e.g. 50% OFF. Use null if absent.
+- Extract only fields visible in that specific image.
+- Use null for fields that are not visible or unclear.
+- Do not merge information across images.
+- Do not guess.
+
+Example shape:
+{
+  "items": [
+    {
+      "image_path": "data/uploads/example.jpg",
+      "tag_text": "GH000000 Product Front",
+      "category_type": null,
+      "manufacturer": null,
+      "brand": null,
+      "product_name": null,
+      "weight": null,
+      "unit": null,
+      "packaging_type": null,
+      "country_of_origin": null,
+      "promotional_messages": null,
+      "variant": null,
+      "fragrance_flavor": null,
+      "addons": null,
+      "tagline": null
+    }
+  ]
+}
