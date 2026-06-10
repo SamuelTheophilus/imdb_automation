@@ -4,20 +4,16 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
-from PIL import Image
-from pydantic import BaseModel, Field
 
-from backend.barcode import _bottom_crop
 from backend.extractor import extract_information_from_images
 from backend.normalizer import check_duplicate, normalize_record
 from backend.schema import IMDBRecordWithConfidence
-from backend.utils import _encode_pil_image, vlm_call
 
 load_dotenv()
 
 
 class PipelineResult:
-    """Wraps the final output of the pipeline for the UI layer."""
+    """Wraps the final output of one product extraction for the UI layer."""
 
     def __init__(
         self,
@@ -30,8 +26,8 @@ class PipelineResult:
         self.record = record
         self.normalized_fields = normalized_fields
         self.duplicate_suggestions = duplicate_suggestions
-        self.image_path = image_path
-        self.image_paths: list[str] = image_paths or [image_path]
+        self.image_path = image_path                        # primary image (thumbnail)
+        self.image_paths: list[str] = image_paths or [image_path]  # all grouped images
 
     @property
     def low_confidence_fields(self) -> list[str]:
@@ -46,16 +42,8 @@ class PipelineResult:
         return len(self.low_confidence_fields) > 0
 
     def to_dict(self) -> dict:
-        """Flat dict for CSV/Excel export — one row per product."""
+        """Return a flat dict in the dataset submission column format."""
         data = self.record.model_dump()
-
-        # combine weight + unit into single readable string for export
-        if data.get("weight") and data.get("unit"):
-            data["weight_display"] = f"{data['weight']} {data['unit']}"
-        else:
-            data["weight_display"] = None
-
-        # strip confidence fields from export
         export_keys = [
             "barcode",
             "category_type",
@@ -63,9 +51,7 @@ class PipelineResult:
             "manufacturer",
             "brand",
             "product_name",
-            "weight",
-            "unit",
-            "weight_display",
+            "weight",           # already combined e.g. "100G", "1.5 KG"
             "packaging_type",
             "country_of_origin",
             "promotional_messages",
@@ -80,34 +66,32 @@ class PipelineResult:
 async def run_pipeline(
     image_paths: list[str] | list[Path],
     existing_records: list[dict] | None = None,
-    use_local: bool = True,
 ) -> list[PipelineResult]:
-    """
-    Full pipeline: image → barcode + VLM extraction → normalization → duplicate check → PipelineResult.
+    """Run the full extraction pipeline on a list of product images.
+
+    Steps:
+    1. Verify all paths exist.
+    2. If IMDB_USE_DUMMY_EXTRACTION=YES, return a fixed sample record (for demos).
+    3. Otherwise: extract via VLM → normalize → check duplicates.
+
     Args:
-        image_path:       Path to product image.
-        existing_records: Current IMDB rows for duplicate checking.
-                          Pass empty list or None if no existing data.
-        use_local:        True = Ollama local, False = Modal endpoint.
+        image_paths:      Paths to the product images (multiple angles welcome).
+        existing_records: Current IMDB rows used for duplicate detection.
+                          Pass empty list or None if there are no existing rows.
+
     Returns:
-        PipelineResult with record, confidence scores,
-        normalized fields, and duplicate suggestions.
+        One PipelineResult per distinct product found across the images.
     """
-
     verified_paths = []
-
     for img in image_paths:
         img = Path(img)
         if not img.exists():
             raise FileNotFoundError(f"Image not found: {img}")
         verified_paths.append(img)
 
-    # if not image_path.exists():
-    #     raise FileNotFoundError(f"Image not found: {image_path}")
-    #
-    use_dummy = os.getenv("IMDB_USE_DUMMY_EXTRACTION")
-
-    if use_dummy == "YES":
+    # Dummy mode returns a fixed record so the UI can be demonstrated without
+    # a running model. Enabled via the IMDB_USE_DUMMY_EXTRACTION env var.
+    if os.getenv("IMDB_USE_DUMMY_EXTRACTION") == "YES":
         print("[pipeline] Using dummy extraction result...")
         record = IMDBRecordWithConfidence(
             barcode=None,
@@ -116,8 +100,8 @@ async def run_pipeline(
             manufacturer="Kellogg's",
             brand="Apple Jacks",
             product_name="Apple Jacks Sweetened Cereal with Apple & Cinnamon",
-            weight="23",
-            unit="OZ",
+            weight="23OZ",
+            unit=None,
             packaging_type="BOX",
             country_of_origin=None,
             promotional_messages="FAMILY SIZE + 25% MORE FREE; 1 BOX = 1 FREE BOOK",
@@ -132,7 +116,7 @@ async def run_pipeline(
             brand_confidence=0.9,
             product_name_confidence=0.9,
             weight_confidence=0.9,
-            unit_confidence=0.9,
+            unit_confidence=0.0,
             packaging_type_confidence=0.9,
             country_of_origin_confidence=0.0,
             promotional_messages_confidence=0.9,
@@ -152,14 +136,11 @@ async def run_pipeline(
         ]
 
     print("[pipeline] Extracting from uploaded images...")
-    extracted_products: list[
-        tuple[IMDBRecordWithConfidence, list[str]]
-    ] = await extract_information_from_images(
-        verified_paths,
-        use_local=use_local,
+    extracted_products: list[tuple[IMDBRecordWithConfidence, list[str]]] = (
+        await extract_information_from_images(verified_paths)
     )
-    pipeline_results: list[PipelineResult] = []
 
+    pipeline_results: list[PipelineResult] = []
     for record, group_paths in extracted_products:
         print(f"[pipeline] Extraction result type: {type(record)}")
         print(f"[pipeline] Extraction result: {record}")
@@ -168,10 +149,7 @@ async def run_pipeline(
         record, normalized_fields = normalize_record(record)
 
         print("[pipeline] Checking for duplicates...")
-        duplicates = check_duplicate(
-            record,
-            existing_records=existing_records or [],
-        )
+        duplicates = check_duplicate(record, existing_records=existing_records or [])
 
         print(
             f"[pipeline] Done. "
@@ -190,33 +168,3 @@ async def run_pipeline(
         )
 
     return pipeline_results
-
-    # return PipelineResult(
-    #     record=record,
-    #     normalized_fields=normalized_fields,
-    #     duplicate_suggestions=duplicates,
-    #     image_path=str(verified_paths),
-    # )
-
-
-# def run_batch_pipeline(
-#     image_paths: list[str | Path],
-#     existing_records: list[dict] | None = None,
-#     use_local: bool = True,
-# ) -> list[PipelineResult]:
-#     """
-#     Runs the pipeline on multiple images sequentially.
-#     Used by the eval script to process the full dataset.
-#     """
-#     results = []
-#     try:
-#         result = run_pipeline(
-#             image_paths,
-#             existing_records=existing_records,
-#             use_local=use_local,
-#         )
-#         results.append(result)
-#     except Exception as e:
-#         print(f"[pipeline] Failed on {image_paths}: {e}")
-
-#     return results

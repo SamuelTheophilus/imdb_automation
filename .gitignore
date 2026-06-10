@@ -8,3 +8,6 @@ data/*.sqlite3-*
 data/uploads/
 data/imdb_export.csv
 data/imdb_export.xlsx
+imdb_images/
+.DS_Store
+eval/eval_from_org.xlsx

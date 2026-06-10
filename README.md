@@ -2,100 +2,79 @@
 
 AI-driven image-to-item-master-data tool for retail product cataloging.
 
-This project was built for the GDSS-Maverick Hackathon challenge: auto-fill an Item Master Database (IMDB) row from a product image. The app accepts product label images, extracts structured product attributes, lets a user review and edit the result, and exports the final records as CSV or Excel for database upload.
+Built for the GDSS-Maverick Hackathon challenge: auto-fill an Item Master Database (IMDB) row from product images. The app accepts multiple product label images, groups them by product, extracts structured attributes using a local vision-language model, lets a user review and edit the result, and exports the final records as CSV or Excel.
 
 ## Problem
 
-Retail teams often fill item master records manually by reading product labels and typing values into spreadsheets or database forms. That process is slow and error-prone, especially when teams need consistent names for brands, categories, packaging, weights, and promotional messages.
+Retail teams fill item master records manually by reading product labels and typing values into spreadsheets. That process is slow and error-prone, especially at scale. IMDB AutoFill reduces that work by turning a set of product images into a structured product-master row.
 
-IMDB AutoFill reduces that manual work by turning a product image into a structured product-master row.
+## Pipeline Overview
 
-## Target IMDB Fields
-
-The app extracts and exports these product attributes:
-
-1. Barcode
-2. Category type
-3. Segment type
-4. Manufacturer
-5. Brand
-6. Product name
-7. Weight
-8. Unit
-9. Packaging type
-10. Country of origin
-11. Promotional or marketing messages
-
-The hackathon brief lists weight and unit as one IMDB attribute. This implementation stores them separately for editing and also exports a combined `weight_display` field.
-
-## What Is Implemented
-
-- Multi-image upload from the web UI
-- Local vision-language model extraction through Ollama's OpenAI-compatible API
-- Deterministic barcode decoding before model fallback
-- Prompt-based extraction into a strict JSON schema
-- Per-field confidence flags for human review
-- Fuzzy normalization for category, segment, brand, and packaging labels
-- Duplicate suggestion logic using barcode and fuzzy brand/product matching
-- Editable AG Grid preview table
-- Review drawer with larger image preview and one input per IMDB field
-- CSV and Excel export
-- SQLite persistence for users, uploads, edits, confidence metadata, and history
-- Login/signup flow for separating user records
-- Version history for edited extractions
-- Dummy extraction mode for reliable demos without a running model
-
-## Architecture
-
-```text
-Product image
-    |
-    v
-Upload and save image
-    |
-    v
-Barcode decoder
-    |
-    v
-Vision-language extraction with prompt templates
-    |
-    v
-Pydantic IMDB schema
-    |
-    v
-Normalization and duplicate checks
-    |
-    v
-Editable UI preview
-    |
-    v
+```
+Product images (multiple angles)
+        |
+        v
+Image grouping  ←── tag similarity across image edges
+        |
+        v
+Barcode decoding  ←── pyzbar with preprocessing fallbacks
+        |
+        v
+VLM extraction  ←── llama3.2-vision:11b via Ollama structured outputs
+        |
+        v
+Field aggregation  ←── majority vote across image faces
+        |
+        v
+Normalization  ←── country corrections, barcode cleaning
+        |
+        v
+Duplicate detection  ←── barcode + fuzzy brand/name matching
+        |
+        v
+Editable UI review
+        |
+        v
 CSV / Excel export
 ```
 
-Main modules:
+## Extracted Fields
 
-- `frontend/app.py`: NiceGUI app entry point and page registration
-- `frontend/components.py`: upload area, header, grid, review drawer, and history UI
-- `frontend/handlers.py`: upload processing, export, edit persistence, and delete handlers
-- `backend/extractor.py`: image encoding, VLM call, JSON parsing, and field confidence assignment
-- `backend/barcode.py`: barcode decoding with several image preprocessing attempts
-- `backend/pipeline.py`: end-to-end extraction, normalization, duplicate detection, and export shaping
-- `backend/normalizer.py`: fuzzy normalization and duplicate suggestion rules
-- `backend/db.py`: SQLite persistence and extraction version history
-- `core/prompts/`: system and extraction prompts used by the VLM
+Maps directly to the dataset submission format:
+
+| Export Column     | Description                                      |
+|-------------------|--------------------------------------------------|
+| ITEM_NAME         | Full product name as printed                     |
+| BARCODE           | Numeric barcode (pyzbar decoded)                 |
+| MANUFACTURER      | Legal company name                               |
+| BRAND             | Brand name on pack                               |
+| WEIGHT            | Combined weight + unit e.g. `100G`, `1.5 KG`    |
+| PACKAGING TYPE    | e.g. `BOX`, `SACHET`, `TUB`, `GLASS JAR`        |
+| COUNTRY           | Country of manufacture                           |
+| VARIANT           | e.g. `ORIGINAL`, `LOW FAT`                       |
+| TYPE              | Product category e.g. `MARGARINE`, `SOAP`        |
+| FRAGRANCE_FLAVOR  | Flavor or scent where applicable                 |
+| PROMOTION         | On-pack promotion text                           |
+| ADDONS            | Extra pack contents                              |
+| TAGLINE           | Short slogan or descriptive tagline              |
 
 ## Requirements
 
 - Python 3.13+
 - `uv`
-- Ollama, for live VLM extraction
-- Local model: `qwen3-vl:4b`
-- `zbar` system library for `pyzbar` barcode decoding
+- Ollama
+- `zbar` system library for barcode decoding
 
-On macOS, install the native barcode dependency with:
+On macOS:
 
 ```bash
 brew install zbar
+```
+
+On Linux:
+
+```bash
+sudo apt-get install libzbar0
 ```
 
 Install Python dependencies:
@@ -104,81 +83,108 @@ Install Python dependencies:
 uv sync
 ```
 
-Pull the local vision model:
+Pull the vision model:
 
 ```bash
-ollama pull qwen3-vl:4b
+ollama pull llama3.2-vision:11b
 ```
 
-Make sure Ollama is running before live extraction:
+## Environment Variables
+
+Copy `.env.example` to `.env` and set as needed:
+
+| Variable                  | Default           | Purpose                                                      |
+|---------------------------|-------------------|--------------------------------------------------------------|
+| `VL_MODEL`                | `qwen3-vl:4b`     | Ollama model name — set to `llama3.2-vision:11b` for best results |
+| `OLLAMA_CONCURRENCY`      | `2`               | Max simultaneous Ollama requests from Python — match to `OLLAMA_NUM_PARALLEL` |
+| `VLM_BATCH_SIZE`          | `1`               | Images per VLM call — llama3.2-vision only supports 1        |
+| `IMDB_USE_DUMMY_EXTRACTION` | —               | Set to `YES` to skip the VLM for UI demos                    |
+
+## Running Ollama for Best Performance
+
+By default Ollama processes one request at a time. For parallel inference set `OLLAMA_NUM_PARALLEL` before starting the server:
 
 ```bash
-ollama serve
+OLLAMA_NUM_PARALLEL=4 ollama serve
 ```
+
+Also set `OLLAMA_CONCURRENCY=4` in your `.env` to match.
+
+**GPU sizing guide for llama3.2-vision:11b (~8 GB VRAM per slot):**
+
+| GPU VRAM  | Recommended NUM_PARALLEL | ~Time for 45 images |
+|-----------|--------------------------|---------------------|
+| 8 GB      | 1                        | ~104s               |
+| 16 GB     | 2                        | ~52s                |
+| 24 GB     | 3                        | ~35s                |
+| 32 GB+    | 4                        | ~26s                |
+
+Latency scales as `ceil(images / NUM_PARALLEL) × ~2.3s` per image.
 
 ## Run The App
 
 ```bash
-uv run python frontend/app.py
+uv run python -m frontend.app
 ```
 
-Open:
-
-```text
-http://localhost:5200
-```
-
-Create an account, upload one or more product images, review the extracted rows, edit any low-confidence fields, then export CSV or Excel from the header.
+Open `http://localhost:5200`, create an account, upload product images, review extracted rows, and export.
 
 ## Demo Mode
 
-For a stable demo without relying on a running VLM, enable dummy extraction:
+For a stable demo without a running model:
 
 ```bash
-IMDB_USE_DUMMY_EXTRACTION=YES uv run python frontend/app.py
+IMDB_USE_DUMMY_EXTRACTION=YES uv run python -m frontend.app
 ```
 
-Dummy mode returns a fixed sample product record and still exercises the UI, persistence, review, confidence flagging, and export workflow.
+Returns a fixed sample record and exercises the full UI, persistence, review, and export workflow.
 
-## Export Output
+## Usage
 
-Exports are written to the `data/` directory and downloaded by the browser:
-
-- `data/imdb_export.csv`
-- `data/imdb_export.xlsx`
-
-Exported columns:
-
-- `barcode`
-- `category_type`
-- `segment_type`
-- `manufacturer`
-- `brand`
-- `product_name`
-- `weight`
-- `unit`
-- `packaging_type`
-- `country_of_origin`
-- `promotional_messages`
-- `weight_display`
-
-## Demo Walkthrough
-
-1. Log in or create a new account.
-2. Upload a product image.
-3. Wait for extraction to complete.
+1. Log in or create an account.
+2. Upload one or more product images (multiple angles of the same product at once works best — the pipeline groups them automatically).
+3. Wait for extraction — the grid updates when done.
 4. Review the row status:
-   - Green: high confidence
-   - Yellow: needs review
-   - Red: possible duplicate
-5. Click `Review` to compare the image with extracted fields.
-6. Edit incorrect or missing fields.
-7. Save changes.
-8. Export CSV or Excel.
-9. Show the exported file as the product-master import table.
+   - **Green** — high confidence, likely correct
+   - **Yellow** — one or more fields need review
+   - **Red** — possible duplicate of an existing record
+5. Click **Review** to open the side drawer: view the image carousel and edit any field.
+6. Save changes, then export CSV or Excel from the header.
 
-## Hackathon Fit
+## Model Notes
 
-This project satisfies the core deliverable: a web UI and backend pipeline that accepts product images, extracts IMDB fields, allows human review, and exports structured CSV/Excel files for product-master ingestion.
+The pipeline uses **llama3.2-vision:11b** via Ollama's native `/api/chat` endpoint with structured output constraints (JSON schema). This eliminates JSON parsing failures and thinking-token overhead seen with other models.
 
-It also includes bonus-oriented features such as standardized naming, low-confidence review flags, duplicate suggestion logic, persistence, and edit history.
+Models evaluated during development:
+
+| Model               | Accuracy  | Notes                                                      |
+|---------------------|-----------|------------------------------------------------------------|
+| llama3.2-vision:11b | Best      | No thinking mode, reliable structured output, 1 img/call  |
+| qwen3-vl:4b         | Good      | Works but thinking tokens can consume token budget         |
+| qwen3-vl:8b         | Unreliable| Thinking mode can't be suppressed via Ollama API           |
+| qwen2.5-vl:7b       | Poor      | Doesn't follow structured extraction prompts reliably      |
+
+**Batching note:** llama3.2-vision via Ollama is limited to one image per API call. Multi-image batching (`VLM_BATCH_SIZE > 1`) requires a model and backend that supports multiple images per request.
+
+## Project Structure
+
+```
+backend/
+  pipeline.py       end-to-end orchestration
+  extractor.py      VLM calls, JSON parsing, field aggregation
+  barcode.py        pyzbar decoding with preprocessing fallbacks
+  normalizer.py     country corrections, barcode cleaning, duplicate detection
+  db.py             SQLite persistence and edit version history
+  schema.py         Pydantic models with per-field confidence scores
+core/prompts/
+  vlm_system_prompt.j2    field definitions and output contract
+  vlm_extraction_prompt.j2 per-image extraction instructions
+frontend/
+  app.py            NiceGUI entry point and page registration
+  components.py     grid, review drawer, carousel, upload zone
+  handlers.py       upload, export, edit, and delete handlers
+  state.py          shared state, row mapping, export formatting
+eval/
+  run_eval.py       full dataset pipeline run + accuracy report
+  metrics.py        field-level scoring against ground truth
+```

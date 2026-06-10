@@ -1,71 +1,120 @@
 import base64
 import os
+from dataclasses import dataclass
 from io import BytesIO
 
+import httpx
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from PIL import Image
 from pydantic import BaseModel, Field
 
 load_dotenv()
-use_local: bool = os.getenv("USE_LOCAL_MODEL", "YES") == "YES"
-FILE_NAME_LOG = "[backend/utils]"
 
+# Model name is set via the VL_MODEL env var so it can be swapped without
+# touching code. Defaults to qwen3-vl:4b for backward compatibility, but
+# llama3.2-vision:11b is the recommended model for this pipeline.
+MODEL: str = os.getenv("VL_MODEL", "qwen3-vl:4b")
+
+# OpenAI-compatible client pointed at local Ollama. Used only as a fallback
+# reference — active extraction goes through vlm_call_w_ollama.
 client = AsyncOpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
-MODEL = "qwen3-vl:4b" if use_local else "qwen3-vl:7b"
 
 
 class VLMImageData(BaseModel):
+    """One encoded image to include in a VLM request."""
     img_path: str
-    encoded_data: str
+    encoded_data: str  # base64-encoded JPEG bytes
 
 
 class VLMCallParams(BaseModel):
+    """All inputs needed to fire one VLM request."""
     system_prompt: str
     user_prompt: str
     image_data_list: list[VLMImageData] = Field(default_factory=list)
     description: str = Field(default="VLM call executing ...")
+    # When set, Ollama enforces this JSON schema on the response, eliminating
+    # parse failures. llama3.2-vision supports this; not all models do.
+    format_schema: dict | None = Field(default=None)
 
 
-async def vlm_call(params: VLMCallParams):
-    print(f"[vlm call] sending request to ollama for {params.description}... ")
+# ── Compat wrapper returned by vlm_call_w_ollama ───────────────────────────
+# Mirrors the shape of an OpenAI ChatCompletion response so callers don't
+# need separate code paths for native vs OpenAI-compat responses.
 
-    # /no_think MUST be the first token of the user turn for Qwen3 to honour it.
-    # Placing it after images (as part of the trailing prompt) is too late —
-    # the model has already committed to thinking mode by the time it reads it.
-    content: list[dict] = [{"type": "text", "text": "/no_think\n\n"}]
-    for idx, image_data in enumerate(params.image_data_list, start=1):
-        img_info: str = f"Image {idx}\n Image Path: {image_data.img_path}"
-        content.append({"type": "text", "text": img_info})
-        content.append(
-            {
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:image/jpeg;base64,{image_data.encoded_data}"
-                },
-            }
-        )
-    content.append({"type": "text", "text": params.user_prompt})
+@dataclass
+class _NativeMessage:
+    content: str
+    reasoning: str = ""
 
-    response = await client.chat.completions.create(
-        model=MODEL,
-        messages=[
-            {"role": "system", "content": params.system_prompt},
-            {
-                "role": "user",
-                "content": content,
-            },
-        ],
-        temperature=0.1,
-        max_tokens=2048,
-        extra_body={"think": False, "repeat_penalty": 1.1},
+@dataclass
+class _NativeChoice:
+    message: _NativeMessage
+    finish_reason: str = "stop"
+
+@dataclass
+class _NativeResponse:
+    choices: list
+
+
+async def vlm_call_w_ollama(params: VLMCallParams) -> _NativeResponse:
+    """Fire one extraction request against Ollama's native /api/chat endpoint.
+
+    Using the native endpoint (rather than the OpenAI-compat /v1 layer) lets us
+    pass `think: false` and `format` (structured output schema) as top-level
+    request fields, which the compat layer does not reliably forward.
+
+    Returns a _NativeResponse whose shape matches OpenAI ChatCompletion so the
+    rest of the pipeline can treat both interchangeably.
+    """
+    print(
+        f"[vlm call] sending request to ollama (native) for "
+        f"{params.description}... {MODEL} in use....."
     )
 
-    print("[vlm call] got response from ollama")
-    return response
+    # Build the message: interleave path labels and base64 images so the model
+    # knows which image each label refers to.
+    text_parts = []
+    images = []
+    for idx, image_data in enumerate(params.image_data_list, start=1):
+        text_parts.append(f"Image {idx}\n Image Path: {image_data.img_path}")
+        images.append(image_data.encoded_data)
+    text_parts.append(params.user_prompt)
+
+    payload: dict = {
+        "model": MODEL,
+        "messages": [
+            {"role": "system", "content": params.system_prompt},
+            {"role": "user", "content": "\n\n".join(text_parts), "images": images},
+        ],
+        "stream": False,
+        "options": {
+            "temperature": 0.1,     # low temperature for deterministic extraction
+            "repeat_penalty": 1.1,  # mild penalty reduces repetitive filler tokens
+            "num_predict": 2048,
+        },
+    }
+
+    # Attach the JSON schema when provided. Ollama uses grammar-based sampling
+    # to guarantee the response matches the schema exactly.
+    if params.format_schema:
+        payload["format"] = params.format_schema
+
+    async with httpx.AsyncClient(timeout=300.0) as http_client:
+        resp = await http_client.post("http://localhost:11434/api/chat", json=payload)
+        if resp.status_code != 200:
+            print(f"[vlm call] Ollama error {resp.status_code}: {resp.text[:500]}")
+        resp.raise_for_status()
+        data = resp.json()
+
+    msg = data.get("message", {})
+    content = msg.get("content", "")
+    print(f"[vlm call] got response from ollama (native) | content_len={len(content)}")
+    return _NativeResponse(choices=[_NativeChoice(message=_NativeMessage(content=content))])
 
 
 def _encode_pil_image(image: Image.Image, format: str = "JPEG") -> str:
+    """Base64-encode a PIL image for embedding in a VLM request payload."""
     buffer = BytesIO()
     image.save(buffer, format=format)
     return base64.b64encode(buffer.getvalue()).decode("utf-8")

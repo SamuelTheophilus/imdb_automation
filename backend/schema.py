@@ -1,29 +1,36 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 from typing import Optional
 
 
 class IMDBRecord(BaseModel):
+    """Flat product-master record matching the dataset submission columns."""
     barcode: Optional[str] = Field(None)
-    category_type: Optional[str] = Field(None)
+    category_type: Optional[str] = Field(None)       # maps to TYPE column
     segment_type: Optional[str] = Field(None)
     manufacturer: Optional[str] = Field(None)
     brand: Optional[str] = Field(None)
-    product_name: Optional[str] = Field(None)
+    product_name: Optional[str] = Field(None)        # maps to ITEM_NAME column
+    # Weight includes the unit as a single string e.g. "100G", "1.5 KG".
     weight: Optional[str] = Field(None)
+    # unit is kept for DB backward-compatibility with existing records but is no
+    # longer populated by the extraction pipeline.
     unit: Optional[str] = Field(None)
     packaging_type: Optional[str] = Field(None)
-    country_of_origin: Optional[str] = Field(None)
-    promotional_messages: Optional[str] = Field(None)
-    variant: Optional[str] = Field(None, description="Product variant, e.g. ORIGINAL, LOW FAT")
-    fragrance_flavor: Optional[str] = Field(None, description="Flavor or fragrance, e.g. RICH, VANILLA")
-    addons: Optional[str] = Field(None, description="Extra pack contents, e.g. SPOON INCLUDED")
-    tagline: Optional[str] = Field(None, description="Short promotional or descriptive tagline")
-
+    country_of_origin: Optional[str] = Field(None)   # maps to COUNTRY column
+    promotional_messages: Optional[str] = Field(None) # maps to PROMOTION column
+    variant: Optional[str] = Field(None)
+    fragrance_flavor: Optional[str] = Field(None)
+    addons: Optional[str] = Field(None)
+    tagline: Optional[str] = Field(None)
 
 
 class IMDBRecordWithConfidence(IMDBRecord):
-    """Extends IMDBRecord with per-field confidence scores for the UI."""
+    """Extends IMDBRecord with per-field confidence scores used by the UI.
 
+    Confidence is binary: 0.9 when the VLM returned a non-null value for that
+    field, 0.0 when the field is null or was not extracted. Fields below the
+    threshold (default 0.6) are flagged for human review in the grid.
+    """
     barcode_confidence: float = Field(0.0, ge=0.0, le=1.0)
     category_type_confidence: float = Field(0.0, ge=0.0, le=1.0)
     segment_type_confidence: float = Field(0.0, ge=0.0, le=1.0)
@@ -41,10 +48,10 @@ class IMDBRecordWithConfidence(IMDBRecord):
     tagline_confidence: float = Field(0.0, ge=0.0, le=1.0)
 
     def get_low_confidence_fields(self, threshold: float = 0.6) -> list[str]:
-        """Returns field names where confidence is below threshold."""
+        """Return field names whose confidence score is below threshold."""
         fields = [
             "barcode", "category_type", "segment_type", "manufacturer",
-            "brand", "product_name", "weight", "unit",
+            "brand", "product_name", "weight",
             "packaging_type", "country_of_origin", "promotional_messages",
             "variant", "fragrance_flavor", "addons", "tagline",
         ]

@@ -123,7 +123,7 @@ def history_page():
                     ui.label(f"File: {record['original_filename']}")
                     ui.label(f"Brand: {record.get('brand') or '-'}")
                     ui.label(
-                        f"Weight: {record.get('weight') or '-'} {record.get('unit') or ''}"
+                        f"Weight: {record.get('weight') or '-'}"
                     )
 
                 with ui.expansion(
