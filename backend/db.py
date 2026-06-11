@@ -371,6 +371,29 @@ def update_extraction_fields(extraction_id: int, values: dict[str, Any]) -> None
             )
 
 
+def update_extraction_status(extraction_id: int, status: str) -> None:
+    """Update the status column of an extraction after manual review."""
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE extractions SET status = ?, updated_at = ? WHERE id = ?",
+            (status, _utc_now(), extraction_id),
+        )
+
+
+def update_extraction_image_paths(extraction_id: int, image_paths: list[str]) -> None:
+    """Update the image group for an extraction after an image is removed."""
+    primary = image_paths[0] if image_paths else ""
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE extractions
+            SET image_path = ?, image_paths_json = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (primary, json.dumps(image_paths), _utc_now(), extraction_id),
+        )
+
+
 def list_user_extractions(user_id: int) -> list[dict[str, Any]]:
     """Return all saved extractions for a user's history view."""
     with get_connection() as conn:
