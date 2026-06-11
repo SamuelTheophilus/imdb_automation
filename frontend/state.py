@@ -167,32 +167,21 @@ def cell_renderer(renderer_type: str) -> str:
                 function() {
                     return `
                         <div style="display:flex;align-items:center;height:100%">
-                            <button
+                            <span
                                 style="
-                                    height:34px;
-                                    width:100px;
-                                    border:none;
-                                    border-radius:10px;
-                                    background:linear-gradient(135deg,#6366f1,#4f46e5);
-                                    color:white;
+                                    color:#7480e0;
                                     font-size:12px;
-                                    font-weight:700;
-                                    letter-spacing:0.2px;
-                                    box-shadow:0 2px 8px rgba(79,70,229,0.35);
+                                    font-weight:500;
+                                    font-family:Inter,sans-serif;
                                     cursor:pointer;
-                                    transition:all 0.15s ease;
+                                    letter-spacing:0.1px;
+                                    padding:4px 2px;
+                                    opacity:0.75;
+                                    transition:opacity 0.15s;
                                 "
-                                onmouseover="
-                                    this.style.transform='translateY(-1px)';
-                                    this.style.boxShadow='0 4px 12px rgba(79,70,229,0.45)';
-                                "
-                                onmouseout="
-                                    this.style.transform='translateY(0)';
-                                    this.style.boxShadow='0 2px 8px rgba(79,70,229,0.35)';
-                                "
-                            >
-                                Review
-                            </button>
+                                onmouseover="this.style.opacity='1'"
+                                onmouseout="this.style.opacity='0.75'"
+                            >Review</span>
                         </div>
                     `;
                 }
@@ -227,42 +216,22 @@ def cell_renderer(renderer_type: str) -> str:
         case "status":
             return """
                 function(p) {
-                    const map = {
-                        ok: ['#10b981', 'High confidence'],
-                        warn: ['#f59e0b', 'Needs review'],
-                        duplicate: ['#ef4444', 'Duplicate'],
+                    const cfg = {
+                        ok:        { c:'#10b981', t:'OK' },
+                        warn:      { c:'#f59e0b', t:'Needs review' },
+                        duplicate: { c:'#ef4444', t:'Duplicate' },
                     };
-
-                    const [color, label] = map[p.value] || ['#888', p.value];
-
+                    const { c, t } = cfg[p.value] || { c:'#64748b', t: p.value };
                     return `
-                        <div style="
-                            display:flex;
-                            align-items:center;
-                            height:100%;
-                        ">
-                            <div style="
-                                display:inline-flex;
-                                align-items:center;
-                                gap:8px;
-                                padding:6px 10px;
-                                border-radius:999px;
-                                background:rgba(255,255,255,0.04);
-                                border:1px solid rgba(255,255,255,0.06);
-                                font-size:12px;
-                                font-weight:600;
-                                color:#e5e7eb;
-                            ">
-                                <span style="
-                                    width:9px;
-                                    height:9px;
-                                    border-radius:999px;
-                                    background:${color};
-                                    box-shadow:0 0 6px ${color};
-                                "></span>
-
-                                ${label}
-                            </div>
+                        <div style="display:flex;align-items:center;height:100%;gap:8px">
+                            <span style="
+                                width:6px; height:6px; border-radius:50%;
+                                background:${c}; display:inline-block; flex-shrink:0;
+                            "></span>
+                            <span style="
+                                font-size:12px; color:#8492a6;
+                                font-family:Inter,sans-serif;
+                            ">${t}</span>
                         </div>
                     `;
                 }
@@ -276,9 +245,9 @@ def build_column_defs() -> list[dict]:
     """Build the AG Grid column definition list from FIELDS."""
     cols = [
         {
-            "headerName": "Review",
+            "headerName": "",
             "field": "_review",
-            "width": 140, "minWidth": 140, "maxWidth": 140,
+            "width": 110, "minWidth": 110, "maxWidth": 110,
             "resizable": False, "editable": False, "sortable": False, "filter": False,
             "pinned": "left",
             ":cellRenderer": cell_renderer("review"),

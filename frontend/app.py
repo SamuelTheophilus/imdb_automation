@@ -1,7 +1,6 @@
 import os
 from pathlib import Path
 
-from jinja2 import Environment, FileSystemLoader
 from nicegui import app, ui
 
 # Importing this module registers the /login and /signup pages with NiceGUI.
@@ -18,12 +17,8 @@ from frontend.components import (
     render_upload_zone,
 )
 from frontend.state import db_record_to_row, row_data
+from frontend.styles import STYLES
 from frontend.utils import format_date
-
-styling_templates_folder = f"{Path(__file__).parent.parent}/core/ui"
-env = Environment(loader=FileSystemLoader(styling_templates_folder))
-style_template = env.get_template("app_styling.j2")
-STYLES = style_template.render()
 UPLOAD_DIR = Path("data/uploads")
 
 # Expose uploaded images as normal static files. AG Grid rows only store these
@@ -39,6 +34,13 @@ def main_page():
         return
 
     ui.dark_mode().enable()
+    ui.colors(
+        primary="#6366f1",
+        secondary="#818cf8",
+        positive="#10b981",
+        negative="#ef4444",
+        warning="#f59e0b",
+    )
     ui.add_head_html(STYLES)
 
     # Hydrate the grid from SQLite on page load so a restart does not lose
@@ -66,6 +68,13 @@ def history_page():
         return
 
     ui.dark_mode().enable()
+    ui.colors(
+        primary="#6366f1",
+        secondary="#818cf8",
+        positive="#10b981",
+        negative="#ef4444",
+        warning="#f59e0b",
+    )
     ui.add_head_html(STYLES)
     render_header()
     render_review_drawer()

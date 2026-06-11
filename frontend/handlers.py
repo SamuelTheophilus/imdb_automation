@@ -11,17 +11,18 @@ from frontend.state import FIELDS, get_grid, result_to_row, row_data, row_to_exp
 
 
 async def handle_batch_upload(e: events.MultiUploadEventArguments):
+    # Import here to avoid a circular import (components imports handlers).
+    from frontend.components import hide_processing, show_processing
+
     client = ui.context.client
     user = current_user()
     if not user:
-        ui.notify("Please log in before uploading", type="warning")
+        ui.notify("Please log in before uploading", type="warning", position="center")
         return
     if not e.files:
-        ui.notify("No files selected", type="warning")
+        ui.notify("No files selected", type="warning", position="center")
         return
 
-    # Persist the uploaded image in the project data folder. The extraction
-    # history stores this path and the review drawer uses it for the large image.
     upload_dir = Path("data/uploads")
     upload_dir.mkdir(parents=True, exist_ok=True)
 
@@ -35,24 +36,20 @@ async def handle_batch_upload(e: events.MultiUploadEventArguments):
         saved_paths.append(saved_path)
         filenames.append(filename)
 
-    # persistent notification that we update instead of creating new ones
-    upload_label = f"{len(saved_paths)} image" if len(saved_paths) == 1 else f"{len(saved_paths)} images"
-    notification = ui.notification(
-        message=f"Processing {upload_label}…",
-        spinner=True,
-        timeout=None,
-        type="ongoing",
+    upload_label = (
+        f"{len(saved_paths)} image"
+        if len(saved_paths) == 1
+        else f"{len(saved_paths)} images"
     )
+    show_processing(f"Processing {upload_label}…")
 
     try:
         results: list[PipelineResult] = await run_pipeline(saved_paths)
     except Exception as exc:
         if getattr(client, "_deleted", False):
             return
-        notification.spinner = False
-        notification.type = "negative"
-        notification.message = f"Failed: {exc}"
-        notification.timeout = 3
+        hide_processing()
+        ui.notify(f"Processing failed: {exc}", type="negative", position="center")
         return
 
     original_filename = ", ".join(filenames)
@@ -74,38 +71,42 @@ async def handle_batch_upload(e: events.MultiUploadEventArguments):
         grid.options["rowData"] = list(row_data)
         grid.update()
 
-    notification.spinner = False
-    notification.timeout = 3
+    hide_processing()
+
     if any(result.has_duplicates for result in results):
-        notification.type = "warning"
-        notification.message = f"Possible duplicate in {upload_label}"
+        ui.notify(
+            f"Possible duplicate detected in {upload_label}",
+            type="warning",
+            position="center",
+        )
     else:
-        notification.type = "positive"
-        notification.message = f"{len(results)} product group(s) extracted"
+        n = len(results)
+        label = "product group" if n == 1 else "product groups"
+        ui.notify(f"{n} {label} extracted", type="positive", position="center")
 
 
 def do_export_csv():
     if not row_data:
-        ui.notify("No data to export yet", type="warning")
+        ui.notify("No data to export yet", type="warning", position="center")
         return
     df = pd.DataFrame([row_to_export_dict(row) for row in row_data])
     path = Path("data/predictions.csv")
     path.parent.mkdir(exist_ok=True)
     df.to_csv(path, index=False)
     ui.download(str(path))
-    ui.notify("CSV exported ✓", type="positive")
+    ui.notify("CSV exported", type="positive", position="center")
 
 
 def do_export_excel():
     if not row_data:
-        ui.notify("No data to export yet", type="warning")
+        ui.notify("No data to export yet", type="warning", position="center")
         return
     df = pd.DataFrame([row_to_export_dict(row) for row in row_data])
     path = Path("data/predictions.xlsx")
     path.parent.mkdir(exist_ok=True)
     df.to_excel(path, index=False)
     ui.download(str(path))
-    ui.notify("Excel exported ✓", type="positive")
+    ui.notify("Excel exported", type="positive", position="center")
 
 
 def persist_row_edits(row: dict) -> None:

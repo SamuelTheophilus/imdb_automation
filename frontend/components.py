@@ -1,8 +1,9 @@
+from pathlib import Path
+
 from nicegui import ui
 
+from backend.db import update_extraction_image_paths, update_extraction_status
 from frontend.auth_pages import current_user, logout
-
-# from frontend.utils import format_date
 from frontend.handlers import (
     do_delete_row,
     do_export_csv,
@@ -15,92 +16,265 @@ from frontend.state import FIELDS, build_column_defs, get_grid, image_to_url, ro
 review_drawer = None
 review_carousel_container = None
 review_title = None
+review_subtitle = None
 review_inputs: dict[str, ui.input] = {}
 review_row_id: int | None = None
+review_status_btn = None      # toggles between Mark OK / Needs review
 
+# Tracks which carousel slide is currently visible so the "Delete image"
+# button always targets the right image regardless of navigation.
+_current_slide_index: int = 0
+_current_paths: list[str] = []
+
+
+def _on_slide_change(e) -> None:
+    global _current_slide_index
+    try:
+        _current_slide_index = int(e.value.split("-")[1])
+    except Exception:
+        pass
+
+# ── Processing overlay ───────────────────────────────────────────────────────
+# A persistent dialog shown during pipeline runs. Matches the user's mental
+# model of "something is happening" better than a bottom-corner spinner.
+_processing_dialog = None
+_processing_label = None
+
+
+def render_processing_overlay() -> None:
+    """Create the fullscreen processing dialog (hidden initially)."""
+    global _processing_dialog, _processing_label
+    _processing_dialog = ui.dialog().props("persistent")
+    with _processing_dialog:
+        with ui.card().classes("processing-card items-center gap-4 px-8 py-7"):
+            ui.spinner(size="2.5rem", color="indigo")
+            _processing_label = ui.label("Processing…").classes(
+                "text-sm text-slate-300 font-medium"
+            )
+
+
+def show_processing(message: str = "Processing…") -> None:
+    if _processing_dialog and _processing_label:
+        _processing_label.text = message
+        _processing_dialog.open()
+
+
+def hide_processing() -> None:
+    if _processing_dialog:
+        _processing_dialog.close()
+
+
+# ── Header ───────────────────────────────────────────────────────────────────
 
 def render_header():
     with (
         ui.row()
-        .classes("w-full items-center justify-between px-6 py-4")
-        .style("border-bottom: 1px solid rgba(255,255,255,0.06); background: #0a0a0f;")
+        .classes("w-full items-center justify-between px-8 app-header")
+        .style("height: 56px")
     ):
-        with ui.row().classes("items-center gap-3"):
-            # ui.label("⬡").style("color:#6366f1; font-size:1.4rem")
-            # ui.label("IMDB AutoFill").classes("text-base font-medium mono").style(
-            #     "letter-spacing:-0.3px; color:#e5e7eb"
-            # )
+        with ui.row().classes("items-center gap-2"):
             ui.link("⬡", "/").style(
-                "color:#6366f1; font-size:1.4rem; text-decoration:none"
+                "color:#6366f1; font-size:1.2rem; text-decoration:none; line-height:1"
             )
-            ui.link("IMDB AutoFill", "/").classes("text-base font-medium mono").style(
-                "letter-spacing:-0.3px; color:#e5e7eb; text-decoration:none"
+            ui.link("IMDB AutoFill", "/").classes("app-logo")
+            ui.badge("beta").props("color=indigo outline").classes("text-xs").style(
+                "font-size:9px; padding:2px 6px; opacity:0.6"
             )
-            ui.badge("beta").props("color=indigo").classes("text-xs")
 
-        with ui.row().classes("gap-2 item-center"):
+        with ui.row().classes("items-center gap-0"):
             user = current_user()
             if user:
-                username = user["username"][:5]
-                ui.label(f"{username}...").classes(
-                    "text-xs text-gray-400 self-center q-py-xs"
+                ui.label(user["username"]).style(
+                    "font-size:12px; color:#334155; padding:0 10px 0 4px"
                 )
+                ui.separator().props("vertical").style("height:16px; opacity:0.15; margin: 0 4px")
                 ui.button(
-                    "History",
-                    icon="history",
+                    "History", icon="history",
                     on_click=lambda: ui.navigate.to("/history"),
                 ).props("flat color=white").classes("text-xs")
             ui.button("Export CSV", icon="download", on_click=do_export_csv).props(
                 "flat color=white"
             ).classes("text-xs")
-            ui.button(
-                "Export Excel", icon="table_chart", on_click=do_export_excel
-            ).props("flat color=white").classes("text-xs")
+            ui.button("Export Excel", icon="table_chart", on_click=do_export_excel).props(
+                "flat color=white"
+            ).classes("text-xs")
+            ui.separator().props("vertical").style("height:16px; opacity:0.15; margin: 0 4px")
             ui.button("Log out", icon="logout", on_click=logout).props(
                 "flat color=white"
             ).classes("text-xs")
 
+    render_processing_overlay()
+
+
+# ── Review drawer ────────────────────────────────────────────────────────────
 
 def render_review_drawer():
-    """Create the right-side row editor used by `open_review_drawer`.
+    """Create the right-side row editor. Opens via `open_review_drawer`.
 
-    The grid is optimized for scanning many records. This drawer is optimized
-    for correction: bigger image at the top, then one editable input per field.
+    Carousel at top for all product angles, then grouped field inputs, then
+    action buttons. Per-slide delete lets users remove a mis-grouped image.
     """
-    global review_drawer, review_carousel_container, review_title, review_inputs
+    global review_drawer, review_carousel_container, review_title, review_subtitle, review_inputs, review_status_btn
 
     review_inputs = {}
     review_drawer = (
         ui.right_drawer(value=False, fixed=True, bordered=True)
-        .classes("bg-[#0f0f17] p-4")
-        .style("width: 440px;")
+        .classes("p-0")
+        .style("width: 560px; background: #1e1c19;")
     )
     with review_drawer:
-        with ui.row().classes("w-full items-center justify-between"):
-            review_title = ui.label("Review extraction").classes(
-                "text-base font-medium"
-            )
-            ui.button(icon="close", on_click=review_drawer.hide).props(
-                "flat round dense color=white"
-            )
+        # Header strip
+        with (
+            ui.row()
+            .classes("w-full items-start justify-between px-5 pt-5 pb-4")
+            .style("border-bottom: 1px solid rgba(240,225,205,0.07)")
+        ):
+            with ui.column().classes("gap-0.5 flex-1 min-w-0"):
+                review_title = ui.label("Review extraction").classes(
+                    "text-sm font-semibold"
+                ).style("color:#e2e8f0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis")
+                review_subtitle = ui.label("").classes("text-xs").style("color:#475569")
 
-        # Carousel container — rebuilt each time the drawer opens.
-        # ui.column() is used here rather than ui.element("div") because
-        # NiceGUI's dynamic child injection (clear + with) is designed for
-        # layout containers, not raw HTML element wrappers.
+            ui.button(icon="close", on_click=review_drawer.hide).props(
+                "flat round dense"
+            ).style("color:#475569; margin-top:-4px; flex-shrink:0")
+
+        # Carousel — rebuilt each time the drawer opens for a different row
         review_carousel_container = ui.column().classes("w-full p-0 gap-0")
 
-        with ui.column().classes("w-full gap-2 mt-3"):
-            for key, label in FIELDS:
-                review_inputs[key] = ui.input(label).classes("w-full")
+        # Field groups
+        with ui.column().classes("w-full gap-0 px-5 pt-3 pb-1").style("overflow-y:auto; flex:1"):
 
-        with ui.row().classes("w-full justify-end gap-8 mt-3"):
-            ui.button("Save", icon="save", on_click=save_review_drawer).props(
-                "color=indigo"
+            # Identification
+            ui.label("Identification").classes("drawer-section-label")
+            with ui.row().classes("w-full gap-2"):
+                review_inputs["barcode"] = ui.input("Barcode").classes("flex-1")
+                review_inputs["brand"] = ui.input("Brand").classes("flex-1")
+            review_inputs["manufacturer"] = ui.input("Manufacturer").classes("w-full")
+
+            ui.separator().classes("my-2 opacity-0")
+            ui.label("Product").classes("drawer-section-label")
+            review_inputs["product_name"] = ui.input("Product Name").classes("w-full")
+            with ui.row().classes("w-full gap-2"):
+                review_inputs["weight"] = ui.input("Weight").classes("flex-1")
+                review_inputs["category_type"] = ui.input("Category").classes("flex-1")
+            review_inputs["segment_type"] = ui.input("Segment").classes("w-full")
+
+            ui.separator().classes("my-2 opacity-0")
+            ui.label("Attributes").classes("drawer-section-label")
+            with ui.row().classes("w-full gap-2"):
+                review_inputs["country_of_origin"] = ui.input("Country").classes("flex-1")
+                review_inputs["packaging_type"] = ui.input("Packaging").classes("flex-1")
+            with ui.row().classes("w-full gap-2"):
+                review_inputs["variant"] = ui.input("Variant").classes("flex-1")
+                review_inputs["fragrance_flavor"] = ui.input("Fragrance / Flavor").classes("flex-1")
+
+            ui.separator().classes("my-2 opacity-0")
+            ui.label("Marketing").classes("drawer-section-label")
+            review_inputs["promotional_messages"] = ui.input("Promotion").classes("w-full")
+            review_inputs["addons"] = ui.input("Add-ons").classes("w-full")
+            review_inputs["tagline"] = ui.input("Tagline").classes("w-full")
+
+        # Action bar — Delete is quiet left, Save is prominent right
+        with (
+            ui.row()
+            .classes("w-full items-center justify-between px-5")
+            .style("border-top:1px solid rgba(240,225,205,0.07); min-height:56px; flex-shrink:0")
+        ):
+            ui.button(icon="delete_outline", on_click=delete_from_review_drawer).props(
+                "flat round dense color=grey-7"
             )
-            ui.button(
-                "Delete", icon="delete", on_click=delete_from_review_drawer
-            ).props("flat color=red")
+            with ui.row().classes("gap-2 items-center"):
+                review_status_btn = ui.button(
+                    "Mark OK", on_click=toggle_status_from_drawer
+                ).props("flat dense color=positive").style(
+                    "font-size:12px; font-weight:500; padding:0 12px"
+                )
+                ui.button("Save", on_click=save_review_drawer).props(
+                    "unelevated dense color=indigo-5"
+                ).style("font-size:12px; font-weight:600; padding:0 18px; min-width:80px; height:34px")
+
+
+def _sync_status_btn(status: str) -> None:
+    """Update the status toggle button to reflect the row's current status."""
+    if review_status_btn is None:
+        return
+    if status == "ok":
+        review_status_btn.text = "Needs review"
+        review_status_btn.props("flat dense color=warning")
+    else:
+        review_status_btn.text = "Mark OK"
+        review_status_btn.props("flat dense color=positive")
+
+
+def toggle_status_from_drawer() -> None:
+    """Toggle the current row between 'ok' and 'warn' (needs review)."""
+    global review_row_id
+    if review_row_id is None:
+        return
+
+    for row in row_data:
+        if row["id"] != review_row_id:
+            continue
+
+        new_status = "warn" if row.get("_status") == "ok" else "ok"
+        row["_status"] = new_status
+
+        db_id = row.get("db_id")
+        if db_id:
+            update_extraction_status(int(db_id), new_status)
+
+        _sync_status_btn(new_status)
+
+        grid = get_grid()
+        if grid:
+            grid.options["rowData"] = list(row_data)
+            grid.update()
+
+        label = "OK" if new_status == "ok" else "Needs review"
+        ui.notify(f"Status set to {label}", type="positive", position="center")
+        return
+
+
+async def delete_current_image() -> None:
+    """Delete whichever carousel slide is currently visible, after confirmation."""
+    if not _current_paths:
+        return
+
+    if len(_current_paths) <= 1:
+        ui.notify("Cannot remove the only image", type="warning", position="center")
+        return
+
+    idx = min(_current_slide_index, len(_current_paths) - 1)
+    path_to_remove = _current_paths[idx]
+    slide_num = idx + 1
+    total = len(_current_paths)
+
+    with ui.dialog() as dialog, ui.card().classes("p-6 gap-3"):
+        ui.label("Remove this image?").classes("text-sm font-medium")
+        ui.label(f"Image {slide_num} of {total} will be permanently deleted.").classes(
+            "text-xs"
+        ).style("color:#64748b")
+        with ui.row().classes("justify-end gap-2 w-full pt-2"):
+            ui.button("Cancel", on_click=lambda: dialog.submit(False)).props(
+                "flat color=white"
+            ).classes("text-xs")
+            ui.button("Delete", on_click=lambda: dialog.submit(True)).props(
+                "unelevated color=red"
+            ).classes("text-xs")
+
+    result = await dialog
+    if not result:
+        return
+
+    # Run deletion after the dialog context is fully torn down.
+    # Calling ui.notify inside a destroyed dialog slot raises RuntimeError,
+    # so we do the work here rather than inside _remove_image_from_group.
+    _remove_image_from_group(path_to_remove)
+    try:
+        ui.notify("Image removed", type="info", position="center")
+    except RuntimeError:
+        pass
 
 
 def open_review_drawer(row: dict):
@@ -110,42 +284,119 @@ def open_review_drawer(row: dict):
         return
 
     review_row_id = row["id"]
+
+    product = row.get("product_name") or "Review extraction"
+    brand = row.get("brand", "")
+    weight = row.get("weight", "")
+
     if review_title is not None:
-        review_title.text = row.get("product_name") or "Review extraction"
+        review_title.text = product
+    if review_subtitle is not None:
+        parts = [p for p in [brand, weight] if p]
+        review_subtitle.text = " · ".join(parts) if parts else ""
 
     if review_carousel_container is not None:
         try:
             paths: list[str] = row.get("image_paths") or [row.get("image_path", "")]
             urls = [image_to_url(p) for p in paths if p]
 
+            # Update module-level state so delete_current_image knows what to target
+            global _current_slide_index, _current_paths
+            _current_slide_index = 0
+            _current_paths = paths
+
             review_carousel_container.clear()
             with review_carousel_container:
+                # ── Main image / carousel ────────────────────────────────────
                 if len(urls) > 1:
                     with (
-                        ui.carousel(animated=True, arrows=True, navigation=True)
+                        ui.carousel(
+                            animated=True, arrows=True, navigation=True,
+                            value="slide-0",
+                            on_value_change=_on_slide_change,
+                        )
                         .props("infinite")
-                        .classes("w-full rounded border border-gray-800")
-                        .style("height: 320px; background: #050508;")
+                        .classes("w-full")
+                        .style("height:280px; background:#060a12;")
                     ):
                         for i, url in enumerate(urls):
                             with ui.carousel_slide(name=f"slide-{i}").classes(
                                 "p-0 flex items-center justify-center"
                             ):
                                 ui.image(url).style(
-                                    "max-height: 320px; max-width: 100%; object-fit: contain;"
+                                    "max-height:280px; max-width:100%; object-fit:contain;"
                                 )
                 else:
                     url = urls[0] if urls else ""
-                    ui.image(url).classes("w-full rounded border border-gray-800").style(
-                        "max-height: 320px; object-fit: contain; background: #050508; display:block;"
+                    ui.image(url).classes("w-full").style(
+                        "max-height:280px; object-fit:contain;"
+                        " background:#060a12; display:block;"
                     )
+
+                # ── Single delete button, only shown when removals are possible
+                if len(paths) > 1:
+                    with ui.row().classes("w-full items-center justify-end px-4 py-2").style(
+                        "border-top:1px solid rgba(255,255,255,0.05);"
+                        "background:#060a12;"
+                    ):
+                        ui.label(f"{len(paths)} images").style(
+                            "font-size:11px; color:#334155; font-family:Inter,sans-serif; flex:1"
+                        )
+                        ui.button(
+                            "Delete this image", icon="delete_outline",
+                            on_click=delete_current_image,
+                        ).props("flat dense").style(
+                            "font-size:11px; color:rgba(239,68,68,0.65);"
+                            "font-family:Inter,sans-serif"
+                        )
+
         except Exception as exc:
             print(f"[components] carousel build error: {exc}")
 
     for key, _ in FIELDS:
         review_inputs[key].value = row.get(key, "")
 
+    # Update status toggle button label to reflect the row's current state
+    _sync_status_btn(row.get("_status", "warn"))
+
     review_drawer.show()
+
+
+def _remove_image_from_group(path_to_remove: str) -> None:
+    """Remove one image from the current row's image group."""
+    global review_row_id
+    if review_row_id is None:
+        return
+
+    row = next((r for r in row_data if r["id"] == review_row_id), None)
+    if not row:
+        return
+
+    paths = list(row.get("image_paths") or [row.get("image_path", "")])
+    if len(paths) <= 1:
+        ui.notify("Cannot remove the only image", type="warning", position="center")
+        return
+
+    if path_to_remove in paths:
+        paths.remove(path_to_remove)
+        p = Path(path_to_remove)
+        if p.exists():
+            p.unlink()
+
+    row["image_paths"] = paths
+    row["image_path"] = paths[0]
+    row["thumbnail"] = image_to_url(paths[0])
+
+    db_id = row.get("db_id")
+    if db_id:
+        update_extraction_image_paths(int(db_id), paths)
+
+    grid = get_grid()
+    if grid:
+        grid.options["rowData"] = list(row_data)
+        grid.update()
+
+    open_review_drawer(row)
 
 
 def save_review_drawer():
@@ -165,8 +416,9 @@ def save_review_drawer():
         if grid:
             grid.options["rowData"] = list(row_data)
             grid.update()
-        ui.notify("Saved edits", type="positive")
+        ui.notify("Saved", type="positive", position="center")
         return
+
 
 
 async def delete_from_review_drawer():
@@ -175,76 +427,106 @@ async def delete_from_review_drawer():
     if review_row_id is None:
         return
 
-        # 1. Find the row to delete
     row_to_delete = next((r for r in row_data if r["id"] == review_row_id), None)
     if not row_to_delete:
         return
 
-    # 2. Add a confirmation dialog (standard UX for deletion)
-    with ui.dialog() as dialog, ui.card():
-        ui.label("Are you sure you want to delete this record?")
-        with ui.row().classes("justify-end gap-2 w-full"):
-            ui.button("Yes", on_click=lambda: dialog.submit(True)).props("color=red")
-            ui.button("No", on_click=lambda: dialog.submit(False)).props("outline")
+    with ui.dialog() as dialog, ui.card().classes("p-6 gap-4"):
+        ui.label("Delete this record?").classes("text-sm font-medium")
+        ui.label(
+            row_to_delete.get("product_name") or "This product"
+        ).classes("text-xs text-slate-400")
+        with ui.row().classes("justify-end gap-2 w-full pt-2"):
+            ui.button("Cancel", on_click=lambda: dialog.submit(False)).props(
+                "flat color=white"
+            ).classes("text-xs")
+            ui.button("Delete", on_click=lambda: dialog.submit(True)).props(
+                "unelevated color=red"
+            ).classes("text-xs")
 
     result = await dialog
     if not result:
         return
 
-    # 3. Perform backend deletion
     do_delete_row(row_to_delete)
-
-    # 4. Update local state (modifying the list in-place for state.py)
     row_data[:] = [r for r in row_data if r["id"] != review_row_id]
 
-    # 5. Refresh the AG Grid
     grid = get_grid()
     if grid:
         grid.options["rowData"] = list(row_data)
         grid.update()
 
-    # 6. Cleanup and notify
     review_drawer.hide()
-    ui.notify("Record deleted", type="info")
+    ui.notify("Deleted", type="negative", position="center")
 
+
+# ── Upload zone ──────────────────────────────────────────────────────────────
 
 def render_upload_zone():
-    with ui.element("div").classes("upload-zone w-full"):
-        with ui.column().classes("items-center justify-center py-8 gap-2"):
-            ui.icon("cloud_upload", size="2.2rem").style("color: rgba(255,255,255,0.2)")
-            ui.label("Drop product images here or click to upload").style(
-                "color: rgba(255,255,255,0.35); font-size:13px"
+    with ui.element("div").classes("upload-zone w-full").style(
+        "position:relative; min-height:190px"
+    ):
+        # Decorative layer — visual only, pointer-events:none so clicks pass through
+        with ui.column().classes("items-center justify-center gap-3").style(
+            "position:absolute; inset:0; pointer-events:none; padding:36px 20px; z-index:5"
+        ):
+            ui.icon("cloud_upload", size="2rem").style(
+                "color:rgba(99,102,241,0.5)"
             )
-            ui.label("PNG · JPG · WEBP").style(
-                "color: rgba(255,255,255,0.18); font-size:11px; font-family: DM Mono"
-            )
-            ui.upload(
-                multiple=True,
-                on_multi_upload=handle_batch_upload,
-                auto_upload=True,
-            ).props('accept=".jpg,.jpeg,.png,.webp" flat label="Choose files"').classes(
-                "text-xs mt-1"
-            )
+            with ui.column().classes("items-center gap-1"):
+                ui.label("Drop product images here").style(
+                    "color:#64748b; font-size:14px; font-weight:500;"
+                    "font-family:Inter,sans-serif; letter-spacing:-0.1px"
+                )
+                ui.label(
+                    "Multiple angles of the same product will be grouped automatically"
+                ).style(
+                    "color:#263344; font-size:12px; font-family:Inter,sans-serif"
+                )
+            # Decorative "Add images" button — purely visual, not interactive
+            with ui.element("div").classes("upload-add-btn").style(
+                "margin-top:6px; padding:7px 20px;"
+                "border:1px solid rgba(99,102,241,0.22); border-radius:8px;"
+                "font-size:12px; font-weight:500;"
+                "font-family:Inter,sans-serif; letter-spacing:0.1px;"
+            ):
+                ui.label("Add images").classes("upload-add-btn__label").style(
+                    "color:#818cf8; font-family:Inter,sans-serif; font-size:12px"
+                )
 
+        # Full-zone transparent uploader overlay — handles all clicks + drag-drop
+        ui.upload(
+            multiple=True,
+            on_multi_upload=handle_batch_upload,
+            auto_upload=True,
+        ).props('accept=".jpg,.jpeg,.png,.webp" flat label=""').classes(
+            "upload-zone-cover"
+        )
+
+
+# ── Legend ───────────────────────────────────────────────────────────────────
 
 def render_legend():
     with (
         ui.row()
         .classes("items-center gap-6")
-        .style("font-size:11px; color:rgba(255,255,255,0.3); font-family: DM Mono")
+        .style("font-size:11px; color:#3d5166; font-family:'Inter',sans-serif")
     ):
         for color, label in [
-            ("#10b981", "High confidence"),
+            ("#10b981", "OK"),
             ("#f59e0b", "Needs review"),
-            ("#ef4444", "Possible duplicate"),
+            ("#ef4444", "Duplicate"),
         ]:
-            with ui.row().classes("items-center gap-1"):
+            with ui.row().classes("items-center gap-2"):
                 ui.element("span").style(
-                    f"width:8px;height:8px;border-radius:50%;"
-                    f"background:{color};display:inline-block"
+                    f"width:7px;height:7px;border-radius:50%;"
+                    f"background:{color};display:inline-block;"
+                    f"box-shadow:0 0 5px {color}55"
                 )
                 ui.label(label)
 
+
+# ── Grid ─────────────────────────────────────────────────────────────────────
 
 def render_grid():
     grid = (
@@ -258,9 +540,9 @@ def render_grid():
                 },
                 "columnDefs": build_column_defs(),
                 "rowData": row_data,
-                "rowHeight": 52,
+                "rowHeight": 54,
                 "rowClassRules": {
-                    "row-ok": "data._status === 'ok'",
+                    "row-ok":   "data._status === 'ok'",
                     "row-warn": "data._status === 'warn'",
                     "row-dupe": "data._status === 'duplicate'",
                 },
@@ -271,7 +553,7 @@ def render_grid():
             theme="alpine",
         )
         .classes("w-full")
-        .style("height: 540px")
+        .style("height: 560px; border-radius: 12px; overflow: hidden;")
     )
 
     def on_cell_change(e):
@@ -283,8 +565,6 @@ def render_grid():
                 break
 
     def on_cell_click(e):
-        # Editable cells should keep their normal AG Grid editing behavior.
-        # The drawer opens only from the explicit Review button column.
         if e.args.get("colId") == "_review":
             open_review_drawer(e.args["data"])
 

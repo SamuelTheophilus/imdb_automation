@@ -1,38 +1,314 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<style>
-  * { font-family: 'DM Sans', sans-serif; box-sizing: border-box; }
-  body { background: #0a0a0f; }
-  .upload-zone {
-    border: 1.5px dashed rgba(255,255,255,0.1);
-    border-radius: 12px;
-    background: rgba(255,255,255,0.02);
-    transition: border-color 0.2s, background 0.2s;
-  }
-  .upload-zone:hover {
-    border-color: rgba(99,102,241,0.5);
-    background: rgba(99,102,241,0.04);
-  }
-  .ag-theme-alpine-dark {
-    --ag-background-color: #0f0f17;
-    --ag-odd-row-background-color: #0f0f17;
-    --ag-header-background-color: #13131e;
-    --ag-border-color: rgba(255,255,255,0.06);
-    --ag-row-border-color: rgba(255,255,255,0.04);
-    --ag-font-family: 'DM Sans', sans-serif;
-    --ag-font-size: 12px;
-    --ag-row-hover-color: rgba(99,102,241,0.06);
-  }
-  .ag-theme-alpine-dark .row-ok   { background: rgba(16,185,129,0.05) !important; }
-  .ag-theme-alpine-dark .row-warn { background: rgba(245,158,11,0.07) !important; }
-  .ag-theme-alpine-dark .row-dupe { background: rgba(239,68,68,0.07) !important; }
-  .ag-theme-alpine-dark .cell-warn {
-    background: rgba(245,158,11,0.12) !important;
-    border-left: 2px solid rgba(245,158,11,0.5) !important;
-  }
-  .mono { font-family: 'DM Mono', monospace; }
-</style>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 
+<script>
+/**
+ * Upload-zone click handler — runs CLIENT-SIDE only.
+ *
+ * NiceGUI Python click handlers lose the browser's "user gesture context"
+ * due to the WebSocket round-trip, so programmatic input.click() from Python
+ * gets silently blocked. This listener fires synchronously in the same call
+ * stack as the user's click, which is the only way browsers allow a
+ * file-picker to open without a direct click on the input itself.
+ *
+ * Uses capture phase so it fires before any child element's own handlers.
+ */
+(function () {
+  function init() {
+    document.addEventListener('click', function (e) {
+      var zone = e.target.closest('.upload-zone');
+      if (!zone) return;
+      // Avoid re-triggering when the real file input is what was clicked
+      if (e.target.matches('input[type="file"]')) return;
+      var inp = zone.querySelector('input[type="file"]');
+      if (inp) inp.click();
+    }, true); // true = capture phase
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+</script>
+
+<style>
+/* ─── Zen-inspired warm charcoal palette ────────────────────────────────────
+   Cold blue-black (#0b0f19) → warm dark charcoal (#1a1816).
+   Every surface uses brown-gray tones; borders are cream-tinted.
+   Accent stays indigo – it pops cleanly against warm darks.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/* ─── Quasar brand ───────────────────────────────────────────────────────────── */
+:root {
+  --q-primary:   #6366f1;
+  --q-secondary: #818cf8;
+  --q-positive:  #10b981;
+  --q-negative:  #ef4444;
+  --q-warning:   #f59e0b;
+  --q-info:      #6366f1;
+  --q-dark:      #1a1816;
+}
+
+/* ─── Base ──────────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; }
+
+body, .q-body--dark {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: #1a1816 !important;   /* warm charcoal, Zen footer tone */
+  color: #f0ebe5;                   /* warm cream white */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(240,230,215,0.12); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(99,102,241,0.4); }
+
+/* ─── Header ────────────────────────────────────────────────────────────────── */
+.app-header {
+  background: rgba(22,20,18,0.92);
+  border-bottom: 1px solid rgba(240,225,205,0.07);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  position: sticky;
+  top: 0;
+  z-index: 200;
+}
+.app-header .app-logo {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.3px;
+  color: #f0ebe5;
+  text-decoration: none;
+  font-family: 'Inter', sans-serif;
+}
+.app-header .q-btn {
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  opacity: 0.5;
+  transition: opacity 0.15s ease;
+  letter-spacing: 0.1px !important;
+}
+.app-header .q-btn:hover { opacity: 1; }
+
+/* ─── Upload zone ───────────────────────────────────────────────────────────── */
+.upload-zone {
+  border: 1.5px dashed rgba(240,225,205,0.1);
+  border-radius: 14px;
+  background: rgba(240,225,205,0.02);
+  transition: border-color 0.2s ease, background 0.2s ease;
+  cursor: pointer;
+}
+.upload-zone:hover {
+  border-color: rgba(99,102,241,0.4);
+  background: rgba(99,102,241,0.03);
+}
+
+/* "Add images" pill reacts to zone hover */
+.upload-add-btn {
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.upload-zone:hover .upload-add-btn {
+  border-color: rgba(99,102,241,0.55) !important;
+  background: rgba(99,102,241,0.1) !important;
+}
+.upload-zone:hover .upload-add-btn__label {
+  color: #a5b4fc !important;
+}
+
+/* ── Full-zone transparent uploader overlay ──────────────────────────────────── */
+.upload-zone-cover {
+  position: absolute !important;
+  inset: 0 !important;
+  z-index: 10;
+  opacity: 0.005 !important;
+  cursor: pointer;
+}
+.upload-zone-cover .q-uploader {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  max-height: none !important;
+  min-height: 0 !important;
+  cursor: pointer;
+}
+.upload-zone-cover .q-uploader__header {
+  position: absolute !important;
+  inset: 0 !important;
+  background: transparent !important;
+  padding: 0 !important;
+  height: 100% !important;
+}
+.upload-zone-cover .q-uploader__header-content { height: 100% !important; }
+.upload-zone-cover .q-uploader__actions { position: absolute !important; inset: 0 !important; padding: 0 !important; }
+.upload-zone-cover .q-uploader__actions .q-btn { width: 100% !important; height: 100% !important; border-radius: 0 !important; background: transparent !important; }
+.upload-zone-cover .q-uploader__list { display: none !important; }
+
+/* ─── AG Grid ───────────────────────────────────────────────────────────────── */
+.ag-theme-alpine-dark {
+  --ag-background-color: #211f1c;
+  --ag-odd-row-background-color: #211f1c;
+  --ag-header-background-color: #272421;
+  --ag-border-color: rgba(240,225,205,0.07);
+  --ag-row-border-color: rgba(240,225,205,0.05);
+  --ag-font-family: 'Inter', sans-serif;
+  --ag-font-size: 12px;
+  --ag-row-hover-color: rgba(240,225,205,0.04);
+  --ag-header-column-separator-color: rgba(240,225,205,0.05);
+  --ag-cell-horizontal-padding: 14px;
+  --ag-selected-row-background-color: rgba(99,102,241,0.07);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.ag-theme-alpine-dark .ag-header-cell-label {
+  color: #5a5450;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  font-size: 10px;
+}
+.ag-theme-alpine-dark .ag-cell { color: #a09890; }
+.ag-theme-alpine-dark .ag-row:hover .ag-cell { color: #d4cfc9; }
+
+/* Row tints — warm-tinted, not blue */
+.ag-theme-alpine-dark .row-ok   { background: rgba(99,102,241,0.05) !important; }
+.ag-theme-alpine-dark .row-warn { background: rgba(255,255,255,0.02) !important; }
+.ag-theme-alpine-dark .row-dupe { background: rgba(239,68,68,0.04) !important; }
+.ag-theme-alpine-dark .cell-warn {
+  background: rgba(245,158,11,0.08) !important;
+  border-left: 2px solid rgba(245,158,11,0.35) !important;
+}
+
+/* ─── Drawer ────────────────────────────────────────────────────────────────── */
+.q-drawer--right {
+  border-left: 1px solid rgba(240,225,205,0.07) !important;
+  background: #1e1c19 !important;
+}
+
+/* Drawer inputs — bottom-border only, warm-tinted */
+.q-drawer--right .q-field--dark .q-field__control {
+  background: transparent !important;
+  border-bottom: 1px solid rgba(240,225,205,0.1) !important;
+  border-left: none !important; border-right: none !important; border-top: none !important;
+  border-radius: 0 !important;
+  padding-left: 0 !important; padding-right: 0 !important;
+  min-height: 44px !important;
+}
+.q-drawer--right .q-field--dark.q-field--focused .q-field__control {
+  border-bottom-color: rgba(99,102,241,0.55) !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+.q-drawer--right .q-field--dark .q-field__control:hover {
+  border-bottom-color: rgba(240,225,205,0.2) !important;
+  background: transparent !important;
+}
+.q-drawer--right .q-field--dark .q-field__label {
+  font-size: 10px !important; font-weight: 600 !important;
+  color: #3d3a37 !important; letter-spacing: 0.3px !important;
+  text-transform: uppercase !important; padding-left: 0 !important;
+}
+.q-drawer--right .q-field--dark .q-field__native {
+  color: #d4cfc9 !important; font-size: 13px !important;
+  font-family: 'Inter', sans-serif !important; padding-left: 0 !important;
+}
+.q-drawer--right .q-field--dark .q-field__after,
+.q-drawer--right .q-field--dark .q-field__append { display: none !important; }
+
+/* ─── Global field defaults ──────────────────────────────────────────────────── */
+.q-field--dark .q-field__control {
+  background: rgba(240,225,205,0.04) !important;
+  border-radius: 8px !important;
+}
+.q-field--dark .q-field__control:hover { background: rgba(240,225,205,0.07) !important; }
+.q-field--dark.q-field--focused .q-field__control { background: rgba(99,102,241,0.09) !important; }
+.q-field--dark .q-field__label { font-size: 12px !important; color: #5a5450 !important; }
+.q-field--dark .q-field__native {
+  color: #ede8e2 !important; font-size: 13px !important;
+  font-family: 'Inter', sans-serif !important;
+}
+
+/* ─── Dialogs ───────────────────────────────────────────────────────────────── */
+.q-dialog__backdrop {
+  background: rgba(8,7,6,0.82) !important;
+  backdrop-filter: blur(8px) !important;
+  -webkit-backdrop-filter: blur(8px) !important;
+}
+.q-dialog .q-card {
+  background: #272421 !important;
+  border: 1px solid rgba(240,225,205,0.08) !important;
+  border-radius: 16px !important;
+  box-shadow: 0 25px 60px rgba(0,0,0,0.55) !important;
+}
+.processing-card {
+  background: #272421 !important;
+  border: 1px solid rgba(99,102,241,0.2) !important;
+  border-radius: 18px !important;
+  min-width: 240px;
+}
+
+/* ─── Notifications ──────────────────────────────────────────────────────────── */
+.q-notification {
+  border-radius: 10px !important;
+  font-size: 13px !important;
+  font-family: 'Inter', sans-serif !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.1px !important;
+  box-shadow: 0 8px 30px rgba(0,0,0,0.45) !important;
+  padding: 10px 16px !important;
+}
+
+/* ─── Buttons ───────────────────────────────────────────────────────────────── */
+.q-btn:not(.q-btn--round) { border-radius: 8px !important; }
+.q-btn .q-btn__content {
+  font-family: 'Inter', sans-serif !important;
+  font-weight: 500 !important;
+  text-transform: none !important;
+  letter-spacing: 0.1px !important;
+}
+/* Indigo overrides (matches --q-primary above) */
+.q-btn.bg-primary { background: #6366f1 !important; }
+.q-btn.bg-primary:hover { background: #4f46e5 !important; box-shadow: 0 4px 14px rgba(99,102,241,0.3) !important; }
+.q-btn.bg-indigo-5 { background: #6366f1 !important; }
+.q-btn.bg-indigo-5:hover { background: #4f46e5 !important; }
+.q-btn--flat:not(:hover) { background: transparent !important; }
+
+/* ─── Auth card ──────────────────────────────────────────────────────────────── */
+/* Auth outlined inputs keep a box style */
+.nicegui-column .q-field--outlined.q-field--dark .q-field__control {
+  background: rgba(240,225,205,0.04) !important;
+  border-radius: 10px !important;
+}
+.nicegui-column .q-field--outlined.q-field--dark.q-field--focused .q-field__control {
+  box-shadow: 0 0 0 2px rgba(99,102,241,0.22) !important;
+  background: rgba(99,102,241,0.07) !important;
+}
+
+/* ─── Drawer section labels ──────────────────────────────────────────────────── */
+.drawer-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: #2e2b28;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(240,225,205,0.05);
+  margin-bottom: 2px;
+  font-family: 'Inter', sans-serif;
+  width: 100%;
+}
+
+/* ─── Badge ─────────────────────────────────────────────────────────────────── */
+.q-badge { font-family: 'Inter', sans-serif !important; }
+
+/* ─── Mono ──────────────────────────────────────────────────────────────────── */
+.mono { font-family: 'DM Mono', monospace; }
+</style>
