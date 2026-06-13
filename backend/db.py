@@ -45,6 +45,13 @@ def _migrate_extractions(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE extractions ADD COLUMN {col} TEXT")
 
 
+def _migrate_users(conn: sqlite3.Connection) -> None:
+    """Add the email column to users if it doesn't exist yet."""
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(users)")}
+    if "email" not in existing:
+        conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
+
+
 def _utc_now() -> str:
     """Store timestamps as sortable ISO-8601 UTC strings."""
     return datetime.now(timezone.utc).isoformat()
@@ -121,19 +128,20 @@ def init_db() -> None:
             );
             """
         )
+        _migrate_users(conn)
         _migrate_extractions(conn)
         _seed_missing_versions(conn)
 
 
-def create_user(username: str, password_hash: str) -> int:
+def create_user(username: str, password_hash: str, email: str | None = None) -> int:
     """Persist a new user and return its id."""
     with get_connection() as conn:
         cursor = conn.execute(
             """
-            INSERT INTO users (username, password_hash, created_at)
-            VALUES (?, ?, ?)
+            INSERT INTO users (username, password_hash, email, created_at)
+            VALUES (?, ?, ?, ?)
             """,
-            (username, password_hash, _utc_now()),
+            (username, password_hash, email or None, _utc_now()),
         )
         return int(cursor.lastrowid)
 
@@ -166,6 +174,25 @@ def get_user_by_id(user_id: int) -> dict[str, Any] | None:
             (user_id,),
         ).fetchone()
     return dict(row) if row else None
+
+
+def get_user_by_email(email: str) -> dict[str, Any] | None:
+    """Fetch one user row by email for duplicate-email checks."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM users WHERE email = ?",
+            (email,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def update_user_password(user_id: int, password_hash: str) -> None:
+    """Overwrite the bcrypt hash for a user (reset or change-password flows)."""
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE users SET password_hash = ? WHERE id = ?",
+            (password_hash, user_id),
+        )
 
 
 def _record_values_from_result(result: PipelineResult) -> dict[str, str | None]:

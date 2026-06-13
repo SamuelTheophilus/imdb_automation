@@ -3,7 +3,8 @@ from pathlib import Path
 from nicegui import ui
 
 from backend.db import update_extraction_image_paths, update_extraction_status
-from frontend.auth_pages import current_user, logout
+from frontend.auth_pages import current_user, logout, render_change_password_dialog
+from frontend.tour import TOUR_JS, TOUR_SAMPLE_ROW
 from frontend.handlers import (
     do_delete_row,
     do_export_csv,
@@ -64,6 +65,15 @@ def hide_processing() -> None:
         _processing_dialog.close()
 
 
+# ── Tour ─────────────────────────────────────────────────────────────────────
+
+def _replay_tour() -> None:
+    """Open the sample drawer then start the Driver.js tour."""
+    import asyncio
+    from frontend.app import _launch_tour
+    _launch_tour()
+
+
 # ── Header ───────────────────────────────────────────────────────────────────
 
 def render_header():
@@ -92,6 +102,9 @@ def render_header():
                     "History", icon="history",
                     on_click=lambda: ui.navigate.to("/history"),
                 ).props("flat color=white").classes("text-xs")
+                ui.button(icon="help_outline", on_click=_replay_tour).props(
+                    "flat round dense color=white"
+                ).style("opacity:0.4").tooltip("Take the tour")
             ui.button("Export CSV", icon="download", on_click=do_export_csv).props(
                 "flat color=white"
             ).classes("text-xs")
@@ -99,6 +112,12 @@ def render_header():
                 "flat color=white"
             ).classes("text-xs")
             ui.separator().props("vertical").style("height:16px; opacity:0.15; margin: 0 4px")
+            if user:
+                pw_dialog = render_change_password_dialog()
+                ui.button(icon="lock_reset", on_click=pw_dialog.open).props(
+                    "flat round dense color=white"
+                ).style("opacity:0.5").tooltip("Change password")
+                ui.separator().props("vertical").style("height:16px; opacity:0.15; margin: 0 4px")
             ui.button("Log out", icon="logout", on_click=logout).props(
                 "flat color=white"
             ).classes("text-xs")

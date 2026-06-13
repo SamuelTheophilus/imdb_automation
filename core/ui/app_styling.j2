@@ -311,4 +311,280 @@ body, .q-body--dark {
 
 /* ─── Mono ──────────────────────────────────────────────────────────────────── */
 .mono { font-family: 'DM Mono', monospace; }
+
+/* ─── Landing page ───────────────────────────────────────────────────────────── */
+.landing-root {
+  display: flex;
+  width: 100vw;
+  min-height: 100vh;
+}
+
+/* ── Hero (left 60%) ─────────────────────────────────────────────────────────── */
+.landing-hero {
+  flex: 0 0 60%;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 72px 80px;
+  background: #1a1816;
+}
+
+/* Breathing indigo glow */
+.landing-hero::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse 65% 55% at 35% 48%,
+    rgba(99,102,241,0.11) 0%, transparent 68%);
+  animation: lp-glow-breathe 5s ease-in-out infinite;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Slowly drifting dot grid */
+.landing-hero::after {
+  content: '';
+  position: absolute;
+  inset: -30px;
+  background-image: radial-gradient(rgba(240,225,205,0.05) 1px, transparent 1px);
+  background-size: 30px 30px;
+  animation: lp-dots-drift 12s linear infinite;
+  pointer-events: none;
+  z-index: 0;
+}
+
+@keyframes lp-glow-breathe {
+  0%, 100% { opacity: 0.55; }
+  50%       { opacity: 1;    }
+}
+@keyframes lp-dots-drift {
+  0%   { transform: translate(0, 0);     }
+  100% { transform: translate(30px, 30px); }
+}
+
+.landing-hero-content {
+  position: relative;
+  z-index: 1;
+  max-width: 540px;
+}
+
+.lp-title {
+  font-size: 48px;
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: -2px;
+  color: #f0ebe5;
+  font-family: 'Inter', sans-serif;
+  margin: 0 0 8px;
+}
+
+.lp-title-line2 {
+  display: block;
+  font-size: 40px;
+  font-weight: 700;
+  letter-spacing: -1.5px;
+  color: #6366f1;
+  font-family: 'Inter', sans-serif;
+}
+
+.lp-sub {
+  font-size: 15px;
+  color: #52504c;
+  line-height: 1.75;
+  font-family: 'Inter', sans-serif;
+  max-width: 440px;
+  margin: 22px 0 36px;
+}
+
+.lp-features {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.lp-feature {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  font-size: 13px;
+  color: #47443f;
+  font-family: 'Inter', sans-serif;
+  font-weight: 500;
+  letter-spacing: 0.1px;
+}
+
+.lp-feature-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(99,102,241,0.45);
+  flex-shrink: 0;
+  box-shadow: 0 0 6px rgba(99,102,241,0.3);
+}
+
+/* ── Form panel (right 40%) ──────────────────────────────────────────────────── */
+.landing-form-panel {
+  flex: 0 0 40%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  background: #161412;
+  border-left: 1px solid rgba(240,225,205,0.06);
+  padding: 64px 48px;
+}
+
+.lp-form-wrap {
+  width: 100%;
+  max-width: 360px;
+}
+
+/* ── Tab pill toggle ──────────────────────────────────────────────────────────── */
+.lp-tabs {
+  display: flex;
+  gap: 0;
+  background: rgba(240,225,205,0.04);
+  border: 1px solid rgba(240,225,205,0.07);
+  border-radius: 10px;
+  padding: 3px;
+  margin-bottom: 30px;
+  width: 100%;
+}
+
+.lp-tab {
+  flex: 1;
+  padding: 9px 0;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: 'Inter', sans-serif;
+  color: #5a5450;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+  text-align: center;
+  letter-spacing: 0.1px;
+  user-select: none;
+}
+
+.lp-tab.lp-tab-active {
+  background: #272421;
+  color: #e8e3dc;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+}
+
+.lp-tab:hover:not(.lp-tab-active) {
+  color: #a09890;
+}
+
+/* ── Form section ─────────────────────────────────────────────────────────────── */
+.lp-form-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: #e8e3dc;
+  font-family: 'Inter', sans-serif;
+  letter-spacing: -0.4px;
+  margin-bottom: 6px;
+}
+
+.lp-form-sub {
+  font-size: 13px;
+  color: #52504c;
+  font-family: 'Inter', sans-serif;
+  margin-bottom: 24px;
+  line-height: 1.5;
+}
+
+/* ─── Intro tour (Driver.js overrides) ───────────────────────────────────────── */
+.driver-overlay { background: rgba(0,0,0,0.72) !important; }
+
+.imdb-tour-popover.driver-popover {
+  background: #242220 !important;
+  border: 1px solid rgba(240,225,205,0.1) !important;
+  border-radius: 14px !important;
+  box-shadow: 0 24px 60px rgba(0,0,0,0.65), 0 0 0 1px rgba(240,225,205,0.04) !important;
+  padding: 22px 24px 18px !important;
+  max-width: 300px !important;
+  font-family: 'Inter', sans-serif !important;
+}
+
+.imdb-tour-popover .driver-popover-title {
+  font-size: 14px !important;
+  font-weight: 700 !important;
+  color: #f0ebe5 !important;
+  letter-spacing: -0.3px !important;
+  margin-bottom: 8px !important;
+  font-family: 'Inter', sans-serif !important;
+}
+
+.imdb-tour-popover .driver-popover-description {
+  font-size: 13px !important;
+  color: #6b6560 !important;
+  line-height: 1.65 !important;
+  font-family: 'Inter', sans-serif !important;
+}
+
+.imdb-tour-popover .driver-popover-description strong {
+  color: #a09890 !important;
+  font-weight: 600 !important;
+}
+
+.imdb-tour-popover .driver-popover-footer {
+  margin-top: 16px !important;
+  gap: 6px !important;
+}
+
+.imdb-tour-popover .driver-popover-progress-text {
+  font-size: 11px !important;
+  color: #3d3a37 !important;
+  font-family: 'Inter', sans-serif !important;
+}
+
+.imdb-tour-popover .driver-popover-next-btn {
+  background: #6366f1 !important;
+  border: none !important;
+  border-radius: 8px !important;
+  font-family: 'Inter', sans-serif !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  color: #fff !important;
+  padding: 6px 16px !important;
+  text-shadow: none !important;
+  cursor: pointer !important;
+  transition: background 0.15s ease !important;
+}
+.imdb-tour-popover .driver-popover-next-btn:hover {
+  background: #4f46e5 !important;
+}
+
+.imdb-tour-popover .driver-popover-prev-btn {
+  background: transparent !important;
+  border: 1px solid rgba(240,225,205,0.12) !important;
+  border-radius: 8px !important;
+  font-family: 'Inter', sans-serif !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  color: #6b6560 !important;
+  padding: 6px 14px !important;
+  text-shadow: none !important;
+  cursor: pointer !important;
+}
+.imdb-tour-popover .driver-popover-prev-btn:hover {
+  border-color: rgba(240,225,205,0.25) !important;
+  color: #a09890 !important;
+}
+
+.imdb-tour-popover .driver-popover-close-btn {
+  color: #4a4641 !important;
+  font-size: 18px !important;
+}
+.imdb-tour-popover .driver-popover-close-btn:hover { color: #a09890 !important; }
+
+.imdb-tour-popover .driver-popover-arrow-side-left.driver-popover-arrow  { border-left-color:  #242220 !important; }
+.imdb-tour-popover .driver-popover-arrow-side-right.driver-popover-arrow { border-right-color: #242220 !important; }
+.imdb-tour-popover .driver-popover-arrow-side-top.driver-popover-arrow   { border-top-color:   #242220 !important; }
+.imdb-tour-popover .driver-popover-arrow-side-bottom.driver-popover-arrow{ border-bottom-color:#242220 !important; }
 </style>
