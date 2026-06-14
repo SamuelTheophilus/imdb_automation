@@ -198,5 +198,6 @@ if __name__ in {"__main__", "__mp_main__"}:
         dark=True,
         reload=False,
         storage_secret=os.getenv("STORAGE_SECRET", "imdb-secret-key"),
-        uvicorn_kwargs={"proxy_headers": True, "forwarded_allow_ips": "*"},
+        proxy_headers=True,
+        forwarded_allow_ips="*",
     )
