@@ -16,7 +16,7 @@ from PIL import Image
 from backend.barcode import decode_barcode
 from backend.image_aggregation import group_by_tag_similarity
 from backend.schema import IMDBRecordWithConfidence
-from backend.utils import VLMCallParams, VLMImageData, vlm_call_w_ollama
+from backend.utils import VLMCallParams, VLMImageData, vlm_call_w_ollama, vlm_call_w_openai, vlm_call_w_gemini
 
 # ── Prompt templates ────────────────────────────────────────────────────────
 jinja_templates_folder = f"{Path(__file__).parent.parent}/core/prompts"
@@ -32,21 +32,41 @@ _MAX_ATTEMPTS = 3
 # token count low without losing label legibility.
 _MAX_IMAGE_SIDE = 512
 
-# Number of images sent per VLM call. llama3.2-vision via Ollama supports only
-# one image per request; set > 1 only with a backend that supports multi-image.
-_BATCH_SIZE = int(os.getenv("VLM_BATCH_SIZE", "1"))
+# Which backend to use. Set VLM_BACKEND to one of: ollama, openai, gemini.
+# Falls back to USE_LOCAL_MODEL for backward compatibility.
+def _resolve_backend() -> str:
+    explicit = os.getenv("VLM_BACKEND", "").strip().lower()
+    if explicit in ("ollama", "openai", "gemini"):
+        return explicit
+    return "ollama" if os.getenv("USE_LOCAL_MODEL", "YES").strip().upper() == "YES" else "openai"
 
-# Semaphore limits simultaneous Ollama requests. Set OLLAMA_CONCURRENCY to
-# match the OLLAMA_NUM_PARALLEL value used when starting the Ollama server.
-_OLLAMA_CONCURRENCY = int(os.getenv("OLLAMA_CONCURRENCY", "2"))
+_VLM_BACKEND: str = _resolve_backend()
+
+# Ollama supports only one image per request. Cloud backends (OpenAI, Gemini)
+# accept multiple images per call — batching reduces round-trips and lets the
+# model cross-reference all faces of a product in one pass.
+_BATCH_SIZE = 1 if _VLM_BACKEND == "ollama" else int(os.getenv("VLM_BATCH_SIZE", "8"))
+
+# Semaphore limits simultaneous requests. For Ollama this matches
+# OLLAMA_NUM_PARALLEL; for cloud APIs it caps parallel calls.
+_CONCURRENCY = int(os.getenv("OLLAMA_CONCURRENCY", "2"))
 _semaphore: asyncio.Semaphore | None = None
 
 
 def _get_semaphore() -> asyncio.Semaphore:
     global _semaphore
     if _semaphore is None:
-        _semaphore = asyncio.Semaphore(_OLLAMA_CONCURRENCY)
+        _semaphore = asyncio.Semaphore(_CONCURRENCY)
     return _semaphore
+
+
+async def _vlm_call(params: VLMCallParams):
+    """Route the VLM call to the configured backend."""
+    if _VLM_BACKEND == "gemini":
+        return await vlm_call_w_gemini(params)
+    if _VLM_BACKEND == "openai":
+        return await vlm_call_w_openai(params)
+    return await vlm_call_w_ollama(params)
 
 
 # ── JSON schema for structured VLM output ───────────────────────────────────
@@ -386,7 +406,7 @@ async def _extract_batch(batch: list[Path]) -> list[list[dict]]:
     for attempt in range(1, _MAX_ATTEMPTS + 1):
         try:
             async with _get_semaphore():
-                response = await vlm_call_w_ollama(
+                response = await _vlm_call(
                     VLMCallParams(
                         system_prompt=SYSTEM_PROMPT,
                         user_prompt=EXTRACTION_PROMPT,
@@ -459,7 +479,7 @@ async def extract_information_from_images(
     ]
     print(
         f"[extractor] {len(image_paths)} images → "
-        f"{len(batches)} batches of ≤{_BATCH_SIZE} (concurrency={_OLLAMA_CONCURRENCY})"
+        f"{len(batches)} batches of ≤{_BATCH_SIZE} (concurrency={_CONCURRENCY})"
     )
 
     batch_tasks = [_extract_batch(b) for b in batches]

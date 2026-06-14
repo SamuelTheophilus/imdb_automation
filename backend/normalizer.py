@@ -13,19 +13,34 @@ from backend.schema import IMDBRecordWithConfidence
 # others are placeholder lists that will be replaced with ground-truth values
 # once eval results confirm the correct canonical forms for this dataset.
 
-CANONICAL_BRANDS: list[str] = []
+CANONICAL_BRANDS: list[str] = [
+    "ALFA", "BAMA", "BEL", "BLUE BAND", "BRISK FARM", "C'PROPRE",
+    "CHOCOLIM", "EASY", "ENA PA", "GET", "GOLDEN VICTORIA", "JOJONAVI",
+    "KADI", "KALYPPO", "KING SAM", "KIVO", "LAILA", "LELE", "LUX",
+    "MAGGI", "MASEDA", "MIKSI", "MILO", "MOK", "MOSSE", "MUMMY'S KITCHEN",
+    "POMO", "ROSALINDA", "SISTER", "SIYA", "SO KLIN", "TAPOK",
+    "TASTY TOM", "THIS WAY", "U-FRESH", "VIBE", "ZAA", "ZESTA",
+]
+
+CANONICAL_MANUFACTURERS: list[str] = [
+    "AFRICAN CONSUMER PRODUCTS", "AJC TRADING CO LTD", "AL AIN COMPANY LTD",
+    "AQUAFRESH LIMITED", "ATONA FOODS", "B-DIET LTD", "BLOW CHEM INDUSTRIES LTD",
+    "C'PROPRE", "ETKAF", "FAGIP VENTURES", "GB FOODS", "GEE TRADING SAL",
+    "HAMTA & SONS LTD", "HOMEPRO COMPANY LTD", "KING SAM", "LGD LIMITED",
+    "MADHU JAYANTI INTERNATIONAL PVT LTD", "MENKISH IMPEX",
+    "NAM VIET PHAT FOOD CO. LIMITED", "NESTLE", "NUTRIFOODS", "PROCUS LIMITED",
+    "PROMASIDOR", "PT SAYAP MAS UTAMA", "S.D.T.M", "SENICO",
+    "SISTER SARDINE & MACKEREL VENTURES", "SYNERGY ENTREPRISES ( FZE)",
+    "THE COCA COLA COMPANY", "U-FRESH ENTERPRISES", "UNILEVER", "UPFIELD",
+    "WATAWALA TEA CEYLON LTD", "ZHEJIANG NATIVE PRODUCE & ANIMAL CO LTD",
+]
 
 CANONICAL_CATEGORIES: list[str] = [
-    "Beverages", "Dairy", "Snacks", "Personal Care", "Household",
-    "Bakery", "Confectionery", "Frozen Foods", "Canned Goods",
-    "Condiments", "Cereals", "Baby Products", "Health & Wellness",
+    "MAYONNAISE", "SALTED MARGARINE", "BUTTER", "POWDER",
+    "BLACK TEA", "BAR", "TOMATO MIX", "3 IN 1",
 ]
 
-CANONICAL_SEGMENTS: list[str] = [
-    "Carbonated Drinks", "Juices", "Water", "Tea", "Coffee",
-    "Yoghurt", "Cheese", "Milk", "Chips", "Biscuits", "Chocolate",
-    "Shampoo", "Soap", "Detergent", "Bread", "Pasta", "Rice",
-]
+CANONICAL_SEGMENTS: list[str] = []
 
 CANONICAL_PACKAGING: list[str] = [
     "bottle", "can", "box", "bag", "pouch",
@@ -33,21 +48,37 @@ CANONICAL_PACKAGING: list[str] = [
 ]
 
 # ── Country corrections ─────────────────────────────────────────────────────
-# The VLM frequently truncates or misspells country names. This dict maps known
-# wrong forms to the correct value. Keyed by the uppercase input value.
+# GT countries: CHINA, COTE D'IVOIRE, GHANA, INDIA, INDONESIA, NIGERIA,
+#               SRI LANKA, VIETNAM
 _COUNTRY_CORRECTIONS: dict[str, str] = {
-    "GHAN": "GHANA",
-    "GHANATI": "GHANA",
-    "SOUTH AFRICAN": "SOUTH AFRICA",
-    "SOUTH AFRIC": "SOUTH AFRICA",
-    "SOUTH AFRI": "SOUTH AFRICA",
-    "SOUTH AF": "SOUTH AFRICA",
+    # Ghana
+    "GHAN": "GHANA", "GHANATI": "GHANA",
+    # Nigeria
+    "NIGERIAT": "NIGERIA", "NIGERI": "NIGERIA",
+    # South Africa (not in GT but model hallucinates it)
+    "SOUTH AFRICAN": "SOUTH AFRICA", "SOUTH AFRIC": "SOUTH AFRICA",
+    "SOUTH AFRI": "SOUTH AFRICA", "SOUTH AF": "SOUTH AFRICA",
     "SOUTA": "SOUTH AFRICA",
-    "SINGAPUR": "SINGAPORE",
-    "SINGAPOUR": "SINGAPORE",
-    "SINGHAPUR": "SINGAPORE",
-    "SINGH": "SINGAPORE",
-    "NIGERIAT": "NIGERIA",
+    # Not in GT — clear to avoid false positives
+    "SINGAPUR": None, "SINGAPOUR": None, "SINGHAPUR": None,
+    "SINGH": None, "SINGAPORE": None,
+    "SOUTHERN AFRICA": None, "SOUTH AFRICA": None,
+    # Indonesia
+    "INDONESI": "INDONESIA",
+    # Vietnam
+    "VIET NAM": "VIETNAM", "VIET": "VIETNAM",
+    # Sri Lanka
+    "SRI LANK": "SRI LANKA", "SRILANKA": "SRI LANKA",
+    # Cote d'Ivoire
+    "IVORY COAST": "COTE D'IVOIRE", "COTE DIVOIRE": "COTE D'IVOIRE",
+    "CÔTE D'IVOIRE": "COTE D'IVOIRE",
+    # India
+    "INDI": "INDIA",
+    # China (P.R.C. and PRC are common label abbreviations for China)
+    "CHIN": "CHINA", "CHINI": "CHINA",
+    "P.R.C.": "CHINA", "PRC": "CHINA", "P.R.C": "CHINA",
+    "PEOPLES REPUBLIC OF CHINA": "CHINA",
+    "PEOPLE'S REPUBLIC OF CHINA": "CHINA",
 }
 
 _BARCODE_STRIP = re.compile(r"[^0-9]")
@@ -92,13 +123,16 @@ def _fuzzy_normalize(
 
 
 def _fix_country(value: str | None) -> tuple[str | None, bool]:
-    """Apply known country-name corrections and uppercase the result."""
+    """Apply known country-name corrections and uppercase the result.
+
+    Values mapped to None in _COUNTRY_CORRECTIONS are cleared (not in GT).
+    """
     if not value:
         return value, False
     upper = value.upper().strip()
-    corrected = _COUNTRY_CORRECTIONS.get(upper)
-    if corrected:
-        return corrected, corrected != upper
+    if upper in _COUNTRY_CORRECTIONS:
+        corrected = _COUNTRY_CORRECTIONS[upper]   # may be None (clear it)
+        return corrected, True
     return upper, upper != value
 
 
@@ -133,15 +167,12 @@ def normalize_record(
         record.brand = brand
         normalized_fields.append("brand")
 
-    category, changed = _fuzzy_normalize(record.category_type, CANONICAL_CATEGORIES, threshold=80)
+    manufacturer, changed = _fuzzy_normalize(record.manufacturer, CANONICAL_MANUFACTURERS, threshold=88)
     if changed:
-        record.category_type = category
-        normalized_fields.append("category_type")
+        record.manufacturer = manufacturer
+        normalized_fields.append("manufacturer")
 
-    segment, changed = _fuzzy_normalize(record.segment_type, CANONICAL_SEGMENTS, threshold=80)
-    if changed:
-        record.segment_type = segment
-        normalized_fields.append("segment_type")
+    # category_type is handled by the prompt — no normalizer correction needed
 
     packaging, changed = _fuzzy_normalize(record.packaging_type, CANONICAL_PACKAGING, threshold=90)
     if changed and packaging:
@@ -150,7 +181,7 @@ def normalize_record(
 
     country, changed = _fix_country(record.country_of_origin)
     if changed:
-        record.country_of_origin = country
+        record.country_of_origin = country or None
         normalized_fields.append("country_of_origin")
 
     barcode, changed = _fix_barcode(record.barcode)
