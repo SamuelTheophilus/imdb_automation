@@ -11,14 +11,14 @@ from pydantic import BaseModel, Field
 
 load_dotenv()
 
-# Model name is set via the VL_MODEL env var so it can be swapped without
-# touching code. Defaults to qwen3-vl:4b for backward compatibility, but
-# llama3.2-vision:11b is the recommended model for this pipeline.
-MODEL: str = os.getenv("VL_MODEL", "qwen3-vl:4b")
+# Ollama model, set via VL_MODEL env var.
+MODEL: str = os.getenv("VL_MODEL", "qwen2.5vl:32b")
 
-# OpenAI-compatible client pointed at local Ollama. Used only as a fallback
-# reference — active extraction goes through vlm_call_w_ollama.
-client = AsyncOpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
+# OpenAI model, set via OPENAI_VL_MODEL env var.
+OPENAI_MODEL: str = os.getenv("OPENAI_VL_MODEL", "gpt-4o")
+
+# Gemini model, set via GEMINI_MODEL env var.
+GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 
 class VLMImageData(BaseModel):
@@ -111,6 +111,125 @@ async def vlm_call_w_ollama(params: VLMCallParams) -> _NativeResponse:
     content = msg.get("content", "")
     print(f"[vlm call] got response from ollama (native) | content_len={len(content)}")
     return _NativeResponse(choices=[_NativeChoice(message=_NativeMessage(content=content))])
+
+
+async def vlm_call_w_openai(params: VLMCallParams) -> _NativeResponse:
+    """Fire one extraction request against the OpenAI API.
+
+    Images are sent as base64 data-URLs. Returns the same _NativeResponse
+    shape as vlm_call_w_ollama so the rest of the pipeline is unchanged.
+    """
+    print(
+        f"[vlm call] sending request to openai for "
+        f"{params.description}... {OPENAI_MODEL} in use....."
+    )
+
+    # Build a content array with interleaved image labels and base64 images.
+    content: list[dict] = []
+    for idx, image_data in enumerate(params.image_data_list, start=1):
+        content.append({
+            "type": "text",
+            "text": f"Image {idx}\nImage Path: {image_data.img_path}",
+        })
+        content.append({
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/jpeg;base64,{image_data.encoded_data}",
+                "detail": "high",
+            },
+        })
+    content.append({"type": "text", "text": params.user_prompt})
+
+    messages = [
+        {"role": "system", "content": params.system_prompt},
+        {"role": "user",   "content": content},
+    ]
+
+    kwargs: dict = {
+        "model":                 OPENAI_MODEL,
+        "messages":              messages,
+        "max_completion_tokens": 4096,
+    }
+
+    if params.format_schema:
+        kwargs["response_format"] = {"type": "json_object"}
+
+    openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    response = await openai_client.chat.completions.create(**kwargs)
+
+    content_out = response.choices[0].message.content or ""
+    usage = response.usage
+    if usage:
+        print(
+            f"[vlm call] got response from openai | "
+            f"prompt_tokens={usage.prompt_tokens} "
+            f"completion_tokens={usage.completion_tokens} "
+            f"total_tokens={usage.total_tokens} | "
+            f"content_len={len(content_out)}"
+        )
+    else:
+        print(f"[vlm call] got response from openai | content_len={len(content_out)}")
+    return _NativeResponse(choices=[_NativeChoice(message=_NativeMessage(content=content_out))])
+
+
+async def vlm_call_w_gemini(params: VLMCallParams) -> _NativeResponse:
+    """Fire one extraction request against the Gemini API via its OpenAI-compatible endpoint.
+
+    Google exposes an OpenAI-format endpoint so we can reuse the same client
+    and message structure without adding extra dependencies.
+    """
+    print(
+        f"[vlm call] sending request to gemini for "
+        f"{params.description}... {GEMINI_MODEL} in use....."
+    )
+
+    content: list[dict] = []
+    for idx, image_data in enumerate(params.image_data_list, start=1):
+        content.append({
+            "type": "text",
+            "text": f"Image {idx}\nImage Path: {image_data.img_path}",
+        })
+        content.append({
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/jpeg;base64,{image_data.encoded_data}",
+            },
+        })
+    content.append({"type": "text", "text": params.user_prompt})
+
+    messages = [
+        {"role": "system", "content": params.system_prompt},
+        {"role": "user",   "content": content},
+    ]
+
+    kwargs: dict = {
+        "model":      GEMINI_MODEL,
+        "messages":   messages,
+        "max_tokens": 4096,
+    }
+
+    if params.format_schema:
+        kwargs["response_format"] = {"type": "json_object"}
+
+    gemini_client = AsyncOpenAI(
+        api_key=os.getenv("GEMINI_API_KEY"),
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+    )
+    response = await gemini_client.chat.completions.create(**kwargs)
+
+    content_out = response.choices[0].message.content or ""
+    usage = response.usage
+    if usage:
+        print(
+            f"[vlm call] got response from gemini | "
+            f"prompt_tokens={usage.prompt_tokens} "
+            f"completion_tokens={usage.completion_tokens} "
+            f"total_tokens={usage.total_tokens} | "
+            f"content_len={len(content_out)}"
+        )
+    else:
+        print(f"[vlm call] got response from gemini | content_len={len(content_out)}")
+    return _NativeResponse(choices=[_NativeChoice(message=_NativeMessage(content=content_out))])
 
 
 def _encode_pil_image(image: Image.Image, format: str = "JPEG") -> str:

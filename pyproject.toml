@@ -6,10 +6,12 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "bcrypt>=5.0.0",
+    "google-genai",
     "instructor>=1.15.1",
     "jinja2>=3.1.6",
     "nicegui>=3.12.1",
     "ollama>=0.6.2",
+    "openai>=2.38.0",
     "openpyxl>=3.1.5",
     "pandas>=3.0.3",
     "pillow>=12.2.0",

@@ -1,3 +1,4 @@
+import asyncio
 import os
 from pathlib import Path
 
@@ -18,13 +19,34 @@ from frontend.components import (
 )
 from frontend.state import db_record_to_row, row_data
 from frontend.styles import STYLES
+from frontend.tour import TOUR_JS, TOUR_SAMPLE_ROW
 from frontend.utils import format_date
+
+_DRIVER_CDN = (
+    '<link rel="stylesheet"'
+    ' href="https://cdn.jsdelivr.net/npm/driver.js@1.3.1/dist/driver.css"/>\n'
+    '<script src="https://cdn.jsdelivr.net/npm/driver.js@1.3.1/dist/driver.js.iife.js">'
+    '</script>'
+)
 UPLOAD_DIR = Path("data/uploads")
 
 # Expose uploaded images as normal static files. AG Grid rows only store these
 # short URLs, which keeps click/edit websocket payloads small.
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 app.add_static_files("/uploads", UPLOAD_DIR)
+
+
+def _launch_tour(client=None) -> None:
+    """Open the review drawer with a sample row then start the Driver.js tour."""
+    if client is None:
+        client = ui.context.client
+    open_review_drawer(TOUR_SAMPLE_ROW)
+
+    async def _run():
+        await asyncio.sleep(0.7)   # let drawer slide in
+        client.run_javascript(TOUR_JS)
+
+    asyncio.create_task(_run())
 
 
 @ui.page("/")
@@ -42,6 +64,7 @@ def main_page():
         warning="#f59e0b",
     )
     ui.add_head_html(STYLES)
+    ui.add_head_html(_DRIVER_CDN)
 
     # Hydrate the grid from SQLite on page load so a restart does not lose
     # prior uploads. The in-memory rows remain the active editing/export source
@@ -59,6 +82,19 @@ def main_page():
         render_upload_zone()
         render_legend()
         render_grid()
+
+    # ── Tour ─────────────────────────────────────────────────────────────────
+    # Fire once for first-time users; the "?" header button lets anyone replay.
+    async def _maybe_tour():
+        tour_key = f"tour_shown_{user['id']}"
+        if app.storage.user.get(tour_key):
+            return
+        app.storage.user[tour_key] = True
+        client = ui.context.client   # capture before yielding context
+        await asyncio.sleep(1.2)     # let the page fully render first
+        _launch_tour(client)
+
+    ui.timer(0, _maybe_tour, once=True)
 
 
 @ui.page("/history")
