@@ -136,17 +136,39 @@ def _fix_country(value: str | None) -> tuple[str | None, bool]:
     return upper, upper != value
 
 
-def _fix_barcode(value: str | None) -> tuple[str | None, bool]:
-    """Strip non-numeric characters from a barcode string."""
+_ADDON_TEA_BAGS = re.compile(r"(\d+)\s*FREE\s+TEA\s+BAGS?", re.IGNORECASE)
+
+def _fix_addons(value: str | None) -> tuple[str | None, bool]:
+    """Normalise addon text: 'N FREE TEA BAGS' → 'N FREE ENVELOPE' to match GT labelling."""
     if not value:
         return value, False
-    # Handle float strings from CSV (e.g., "6034000482027.0" → "6034000482027")
-    try:
-        cleaned = str(int(float(str(value))))
-    except (ValueError, OverflowError):
-        cleaned = _BARCODE_STRIP.sub("", str(value))
-    result = cleaned if cleaned else None
-    return result, result != str(value)
+    fixed = _ADDON_TEA_BAGS.sub(lambda m: f"{m.group(1)} FREE ENVELOPE", value)
+    changed = fixed != value
+    return fixed, changed
+
+
+_GS1_AI = re.compile(r"^\(\d+\)")
+
+def _fix_barcode(value: str | None) -> tuple[str | None, bool]:
+    """Normalise a barcode string to a plain numeric EAN/GTIN."""
+    if not value:
+        return value, False
+    original = str(value)
+    # Strip GS1 Application Identifier prefix e.g. "(01)08882033623812" → "08882033623812"
+    stripped = _GS1_AI.sub("", original).strip()
+    # Keep only digits
+    digits = _BARCODE_STRIP.sub("", stripped) if stripped else _BARCODE_STRIP.sub("", original)
+    # Handle float strings from CSV (e.g. "6034000482027.0")
+    if "." in original and not _GS1_AI.match(original):
+        try:
+            digits = str(int(float(original)))
+        except (ValueError, OverflowError):
+            pass
+    # GTIN-14 with leading 0 → EAN-13
+    if len(digits) == 14 and digits.startswith("0"):
+        digits = digits[1:]
+    result = digits if digits else None
+    return result, result != original
 
 
 def normalize_record(
@@ -187,6 +209,11 @@ def normalize_record(
     if changed:
         record.country_of_origin = country or None
         normalized_fields.append("country_of_origin")
+
+    addons, changed = _fix_addons(record.addons)
+    if changed:
+        record.addons = addons
+        normalized_fields.append("addons")
 
     barcode, changed = _fix_barcode(record.barcode)
     if changed:
