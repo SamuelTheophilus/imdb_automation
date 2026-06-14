@@ -26,7 +26,7 @@ _DRIVER_CDN = (
     '<link rel="stylesheet"'
     ' href="https://cdn.jsdelivr.net/npm/driver.js@1.3.1/dist/driver.css"/>\n'
     '<script src="https://cdn.jsdelivr.net/npm/driver.js@1.3.1/dist/driver.js.iife.js">'
-    '</script>'
+    "</script>"
 )
 UPLOAD_DIR = Path("data/uploads")
 
@@ -43,7 +43,7 @@ def _launch_tour(client=None) -> None:
     open_review_drawer(TOUR_SAMPLE_ROW)
 
     async def _run():
-        await asyncio.sleep(0.7)   # let drawer slide in
+        await asyncio.sleep(0.7)  # let drawer slide in
         client.run_javascript(TOUR_JS)
 
     asyncio.create_task(_run())
@@ -90,8 +90,8 @@ def main_page():
         if app.storage.user.get(tour_key):
             return
         app.storage.user[tour_key] = True
-        client = ui.context.client   # capture before yielding context
-        await asyncio.sleep(1.2)     # let the page fully render first
+        client = ui.context.client  # capture before yielding context
+        await asyncio.sleep(1.2)  # let the page fully render first
         _launch_tour(client)
 
     ui.timer(0, _maybe_tour, once=True)
@@ -167,9 +167,7 @@ def history_page():
                 with ui.row().classes("gap-6 text-sm text-gray-300"):
                     ui.label(f"File: {record['original_filename']}")
                     ui.label(f"Brand: {record.get('brand') or '-'}")
-                    ui.label(
-                        f"Weight: {record.get('weight') or '-'}"
-                    )
+                    ui.label(f"Weight: {record.get('weight') or '-'}")
 
                 with ui.expansion(
                     f"Versions ({len(versions)})", icon="history"
@@ -189,6 +187,8 @@ if __name__ in {"__main__", "__mp_main__"}:
     brands_csv = Path("data/canonical_brands.csv")
     if brands_csv.exists():
         load_canonical_brands(brands_csv)
+
+    print("[APP] stating application.")
 
     ui.run(
         favicon="🔎",
