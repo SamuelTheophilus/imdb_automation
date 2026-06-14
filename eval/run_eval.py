@@ -96,14 +96,18 @@ def print_report(report: dict, matched: int, total_pred: int, total_gt: int) -> 
 
 async def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--limit", type=int, help="Max sessions to run")
-    parser.add_argument("--out",   type=str, help="Save predictions CSV to this path")
+    parser.add_argument("--limit",    type=int, help="Max sessions to run")
+    parser.add_argument("--sessions", type=str, help="Comma-separated session IDs to run (e.g. S227303151,S230284547)")
+    parser.add_argument("--out",      type=str, help="Save predictions CSV to this path")
     args = parser.parse_args()
 
     gt_rows = load_gt(GT_FILE)
     print(f"Loaded {len(gt_rows)} ground truth rows")
 
     sessions = group_sessions(IMAGE_DIR)
+    if args.sessions:
+        keep = set(args.sessions.split(","))
+        sessions = {k: v for k, v in sessions.items() if k in keep}
     if args.limit:
         sessions = dict(list(sessions.items())[: args.limit])
     print(f"Running {len(sessions)} sessions\n")

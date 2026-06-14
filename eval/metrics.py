@@ -27,7 +27,12 @@ def _norm(v) -> str:
     if v is None:
         return ""
     s = str(v).strip().upper()
-    return "" if s in ("NAN", "NONE", "") else s
+    if s in ("NAN", "NONE", ""):
+        return ""
+    # pandas reads integer CSV columns as floats (e.g. "6034000482027.0") — strip the .0
+    if s.endswith(".0") and s[:-2].lstrip("-").isdigit():
+        s = s[:-2]
+    return s
 
 
 def _is_correct(pred: str, gt: str, field: str) -> bool:
