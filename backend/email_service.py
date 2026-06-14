@@ -1,35 +1,37 @@
 from __future__ import annotations
 
 import os
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
-import resend
 
-
-def _api_key() -> str:
-    key = os.getenv("RESEND_API_KEY", "")
-    if not key:
+def _gmail_credentials() -> tuple[str, str]:
+    user = os.getenv("GMAIL_USER", "")
+    password = os.getenv("GMAIL_APP_PASSWORD", "")
+    if not user or not password:
         raise RuntimeError(
-            "RESEND_API_KEY is not set. "
-            "Add it to your .env file to enable password reset emails."
+            "GMAIL_USER and GMAIL_APP_PASSWORD must be set in your .env file. "
+            "Generate an App Password at: https://myaccount.google.com/apppasswords"
         )
-    return key
-
-
-def _from_address() -> str:
-    return os.getenv("RESEND_FROM_EMAIL", "IMDB AutoFill <onboarding@resend.dev>")
+    return user, password
 
 
 def send_password_reset(to_email: str, code: str) -> None:
-    """Send a password reset code to the given address via Resend."""
-    resend.api_key = _api_key()
-    resend.Emails.send(
-        {
-            "from": _from_address(),
-            "to": [to_email],
-            "subject": "Your IMDB AutoFill password reset code",
-            "html": _reset_email_html(code),
-        }
-    )
+    """Send a password reset code via Gmail SMTP."""
+    gmail_user, gmail_password = _gmail_credentials()
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = "Your IMDB AutoFill password reset code"
+    msg["From"] = f"IMDB AutoFill <{gmail_user}>"
+    msg["To"] = to_email
+    msg.attach(MIMEText(_reset_email_html(code), "html"))
+
+    with smtplib.SMTP("smtp.gmail.com", 587) as smtp:
+        smtp.ehlo()
+        smtp.starttls()
+        smtp.login(gmail_user, gmail_password)
+        smtp.sendmail(gmail_user, to_email, msg.as_string())
 
 
 def _reset_email_html(code: str) -> str:

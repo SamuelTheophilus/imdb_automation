@@ -265,10 +265,18 @@ def reset_password_page():
 
                 def do_request() -> None:
                     s1_error.text = ""
-                    ok, err = request_password_reset(s1_user.value or "")
+                    ok, err, email = request_password_reset(s1_user.value or "")
                     if not ok:
                         s1_error.text = err
                         return
+                    sent_banner.content = (
+                        '<div style="background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.25);'
+                        'border-radius:10px;padding:14px 16px;margin-bottom:20px;">'
+                        '<p style="margin:0;font-size:13px;color:#6ee7b7;font-family:Inter,sans-serif;'
+                        'line-height:1.5">'
+                        f'Code sent to <strong>{email}</strong> — it expires in 10 minutes.'
+                        '</p></div>'
+                    )
                     step1_col.set_visibility(False)
                     step2_col.set_visibility(True)
 
@@ -279,14 +287,7 @@ def reset_password_page():
 
             # ── Step 2: enter code received by email + new password ──────────
             with step2_col:
-                ui.html(
-                    '<div style="background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.25);'
-                    'border-radius:10px;padding:14px 16px;margin-bottom:20px;">'
-                    '<p style="margin:0;font-size:13px;color:#6ee7b7;font-family:Inter,sans-serif;'
-                    'line-height:1.5">'
-                    'Reset code sent. Check your email — it expires in 10 minutes.'
-                    '</p></div>'
-                )
+                sent_banner = ui.html("")
                 s2_error = ui.label("").style(_ERROR_STYLE)
                 s2_code = ui.input("Reset code").classes("w-full").props("dark outlined dense")
                 ui.element("div").style("height:10px")
@@ -302,8 +303,8 @@ def reset_password_page():
                     if not ok:
                         s2_error.text = msg
                         return
-                    ui.notify("Password updated — please sign in", type="positive", position="center")
-                    ui.navigate.to("/login")
+                    ui.notify("Password updated successfully", type="positive", position="center")
+                    ui.timer(1.5, lambda: ui.navigate.to("/login"), once=True)
 
                 s2_code.on("keydown.enter", do_reset)
                 s2_pass.on("keydown.enter", do_reset)

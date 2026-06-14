@@ -130,21 +130,21 @@ def login(username: str, password: str) -> tuple[bool, str, str | None]:
     return True, "Logged in", create_access_token(user["id"])
 
 
-def request_password_reset(username: str) -> tuple[bool, str]:
+def request_password_reset(username: str) -> tuple[bool, str, str | None]:
     """Generate a one-time reset code and email it to the user's registered address.
 
-    Returns (success, error_message_or_empty_string).
+    Returns (success, error_message_or_empty_string, email_or_none).
     The code is never logged or displayed — it travels only via email.
     """
     from backend.email_service import send_password_reset
 
     user = get_user_by_username(username.strip().lower())
     if not user:
-        return False, "No account found with that username"
+        return False, "No account found with that username", None
 
     email = user.get("email")
     if not email:
-        return False, "No email address is registered for this account"
+        return False, "No email address is registered for this account", None
 
     # Purge expired codes before adding a new one
     now = time.time()
@@ -159,9 +159,9 @@ def request_password_reset(username: str) -> tuple[bool, str]:
     except Exception as exc:
         del _reset_tokens[code]
         print(f"[auth] Failed to send reset email to {email}: {exc}")
-        return False, "Failed to send reset email. Please try again later."
+        return False, "Failed to send reset email. Please try again later.", None
 
-    return True, ""
+    return True, "", email
 
 
 def consume_reset_code(code: str, new_password: str) -> tuple[bool, str]:
