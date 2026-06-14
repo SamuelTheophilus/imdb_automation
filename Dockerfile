@@ -22,5 +22,7 @@ EXPOSE 7860
 
 ENV PORT=7860
 ENV PYTHONUNBUFFERED=1
+# Use the venv Python directly — avoids uv re-syncing dev deps on every startup
+ENV PATH="/app/.venv/bin:$PATH"
 
-CMD ["uv", "run", "python", "-m", "frontend.app"]
+CMD ["python", "-m", "frontend.app"]
