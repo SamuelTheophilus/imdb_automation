@@ -14,6 +14,12 @@ AI-driven image-to-item-master-data tool for retail product cataloging.
 
 Built for the GDSS-Maverick Hackathon: auto-fill an Item Master Database (IMDB) row from product images. Upload multiple photos of a product, let the AI extract brand, weight, manufacturer, country, and 10+ other fields, review and edit the result, then export as CSV or Excel.
 
+## Live Demo
+
+**[https://samueltheophilus-imdb-autofill.hf.space](https://samueltheophilus-imdb-autofill.hf.space)**
+
+> Open the link directly — the embedded HF Spaces preview uses a sandboxed iframe that blocks navigation.
+
 ## How It Works
 
 ```
