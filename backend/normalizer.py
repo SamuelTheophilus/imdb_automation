@@ -140,9 +140,13 @@ def _fix_barcode(value: str | None) -> tuple[str | None, bool]:
     """Strip non-numeric characters from a barcode string."""
     if not value:
         return value, False
-    cleaned = _BARCODE_STRIP.sub("", value)
+    # Handle float strings from CSV (e.g., "6034000482027.0" → "6034000482027")
+    try:
+        cleaned = str(int(float(str(value))))
+    except (ValueError, OverflowError):
+        cleaned = _BARCODE_STRIP.sub("", str(value))
     result = cleaned if cleaned else None
-    return result, result != value
+    return result, result != str(value)
 
 
 def normalize_record(
@@ -167,7 +171,7 @@ def normalize_record(
         record.brand = brand
         normalized_fields.append("brand")
 
-    manufacturer, changed = _fuzzy_normalize(record.manufacturer, CANONICAL_MANUFACTURERS, threshold=88)
+    manufacturer, changed = _fuzzy_normalize(record.manufacturer, CANONICAL_MANUFACTURERS, threshold=82)
     if changed:
         record.manufacturer = manufacturer
         normalized_fields.append("manufacturer")

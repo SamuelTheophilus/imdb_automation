@@ -1,190 +1,164 @@
+---
+title: IMDB AutoFill
+emoji: 🔎
+colorFrom: indigo
+colorTo: purple
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # IMDB AutoFill
 
 AI-driven image-to-item-master-data tool for retail product cataloging.
 
-Built for the GDSS-Maverick Hackathon challenge: auto-fill an Item Master Database (IMDB) row from product images. The app accepts multiple product label images, groups them by product, extracts structured attributes using a local vision-language model, lets a user review and edit the result, and exports the final records as CSV or Excel.
+Built for the GDSS-Maverick Hackathon: auto-fill an Item Master Database (IMDB) row from product images. Upload multiple photos of a product, let the AI extract brand, weight, manufacturer, country, and 10+ other fields, review and edit the result, then export as CSV or Excel.
 
-## Problem
-
-Retail teams fill item master records manually by reading product labels and typing values into spreadsheets. That process is slow and error-prone, especially at scale. IMDB AutoFill reduces that work by turning a set of product images into a structured product-master row.
-
-## Pipeline Overview
+## How It Works
 
 ```
 Product images (multiple angles)
-        |
-        v
-Image grouping  ←── tag similarity across image edges
-        |
-        v
+        │
+        ▼
+Image grouping  ←── edge label (tag_text) similarity
+        │
+        ▼
 Barcode decoding  ←── pyzbar with preprocessing fallbacks
-        |
-        v
-VLM extraction  ←── llama3.2-vision:11b via Ollama structured outputs
-        |
-        v
+        │
+        ▼
+VLM extraction  ←── GPT-5.5 vision model (batch of up to 8 images per call)
+        │
+        ▼
 Field aggregation  ←── majority vote across image faces
-        |
-        v
-Normalization  ←── country corrections, barcode cleaning
-        |
-        v
+        │
+        ▼
+Normalisation  ←── country corrections, barcode cleaning, fuzzy brand matching
+        │
+        ▼
 Duplicate detection  ←── barcode + fuzzy brand/name matching
-        |
-        v
-Editable UI review
-        |
-        v
-CSV / Excel export
+        │
+        ▼
+Editable UI review → CSV / Excel export
 ```
 
 ## Extracted Fields
 
-Maps directly to the dataset submission format:
+| Export Column    | Description                                   |
+|------------------|-----------------------------------------------|
+| ITEM_NAME        | Full product name as printed                  |
+| BARCODE          | Numeric barcode (pyzbar decoded)              |
+| MANUFACTURER     | Legal company name                            |
+| BRAND            | Brand name on pack                            |
+| WEIGHT           | Combined weight + unit e.g. `100G`, `1.5 KG` |
+| PACKAGING TYPE   | e.g. `BOX`, `SACHET`, `TUB`, `GLASS JAR`     |
+| COUNTRY          | Country of manufacture                        |
+| VARIANT          | e.g. `ORIGINAL`, `LOW FAT`                   |
+| TYPE             | Product category e.g. `MARGARINE`, `SOAP`    |
+| FRAGRANCE_FLAVOR | Flavour or scent where applicable             |
+| PROMOTION        | On-pack promotion text                        |
+| ADDONS           | Extra pack contents                           |
+| TAGLINE          | Short slogan or descriptive tagline           |
 
-| Export Column     | Description                                      |
-|-------------------|--------------------------------------------------|
-| ITEM_NAME         | Full product name as printed                     |
-| BARCODE           | Numeric barcode (pyzbar decoded)                 |
-| MANUFACTURER      | Legal company name                               |
-| BRAND             | Brand name on pack                               |
-| WEIGHT            | Combined weight + unit e.g. `100G`, `1.5 KG`    |
-| PACKAGING TYPE    | e.g. `BOX`, `SACHET`, `TUB`, `GLASS JAR`        |
-| COUNTRY           | Country of manufacture                           |
-| VARIANT           | e.g. `ORIGINAL`, `LOW FAT`                       |
-| TYPE              | Product category e.g. `MARGARINE`, `SOAP`        |
-| FRAGRANCE_FLAVOR  | Flavor or scent where applicable                 |
-| PROMOTION         | On-pack promotion text                           |
-| ADDONS            | Extra pack contents                              |
-| TAGLINE           | Short slogan or descriptive tagline              |
+## Environment Variables (Secrets)
 
-## Requirements
+Set these as Hugging Face Spaces secrets (Settings → Variables and secrets):
 
-- Python 3.13+
-- `uv`
-- Ollama
-- `zbar` system library for barcode decoding
+| Variable             | Required | Description                                             |
+|----------------------|----------|---------------------------------------------------------|
+| `OPENAI_API_KEY`     | Yes      | OpenAI API key for GPT-5.5 vision extraction           |
+| `OPENAI_VL_MODEL`    | Yes      | Model name — `gpt-5.5-2026-04-23`                      |
+| `VLM_BACKEND`        | Yes      | Set to `openai`                                         |
+| `GMAIL_USER`         | Yes      | Gmail address for password reset emails                 |
+| `GMAIL_APP_PASSWORD` | Yes      | Gmail App Password (not your real password)             |
+| `STORAGE_SECRET`     | Yes      | Any random string for NiceGUI session encryption        |
+| `VLM_BATCH_SIZE`     | No       | Images per API call (default `8`)                       |
 
-On macOS:
+## Running Locally
+
+**Requirements:** Python 3.13+, `uv`, `libzbar0`
 
 ```bash
+# macOS
 brew install zbar
-```
 
-On Linux:
-
-```bash
+# Linux
 sudo apt-get install libzbar0
 ```
 
-Install Python dependencies:
-
 ```bash
 uv sync
-```
-
-Pull the vision model:
-
-```bash
-ollama pull llama3.2-vision:11b
-```
-
-## Environment Variables
-
-Copy `.env.example` to `.env` and set as needed:
-
-| Variable                  | Default           | Purpose                                                      |
-|---------------------------|-------------------|--------------------------------------------------------------|
-| `VL_MODEL`                | `qwen3-vl:4b`     | Ollama model name — set to `llama3.2-vision:11b` for best results |
-| `OLLAMA_CONCURRENCY`      | `2`               | Max simultaneous Ollama requests from Python — match to `OLLAMA_NUM_PARALLEL` |
-| `VLM_BATCH_SIZE`          | `1`               | Images per VLM call — llama3.2-vision only supports 1        |
-| `IMDB_USE_DUMMY_EXTRACTION` | —               | Set to `YES` to skip the VLM for UI demos                    |
-
-## Running Ollama for Best Performance
-
-By default Ollama processes one request at a time. For parallel inference set `OLLAMA_NUM_PARALLEL` before starting the server:
-
-```bash
-OLLAMA_NUM_PARALLEL=4 ollama serve
-```
-
-Also set `OLLAMA_CONCURRENCY=4` in your `.env` to match.
-
-**GPU sizing guide for llama3.2-vision:11b (~8 GB VRAM per slot):**
-
-| GPU VRAM  | Recommended NUM_PARALLEL | ~Time for 45 images |
-|-----------|--------------------------|---------------------|
-| 8 GB      | 1                        | ~104s               |
-| 16 GB     | 2                        | ~52s                |
-| 24 GB     | 3                        | ~35s                |
-| 32 GB+    | 4                        | ~26s                |
-
-Latency scales as `ceil(images / NUM_PARALLEL) × ~2.3s` per image.
-
-## Run The App
-
-```bash
+cp .env.example .env   # fill in your API keys
 uv run python -m frontend.app
 ```
 
-Open `http://localhost:5200`, create an account, upload product images, review extracted rows, and export.
+Open `http://localhost:5200`.
 
-## Demo Mode
-
-For a stable demo without a running model:
+## Rebuilding with Docker
 
 ```bash
-IMDB_USE_DUMMY_EXTRACTION=YES uv run python -m frontend.app
+docker build -t imdb-autofill .
+docker run -p 7860:7860 \
+  -e OPENAI_API_KEY=sk-... \
+  -e OPENAI_VL_MODEL=gpt-5.5-2026-04-23 \
+  -e VLM_BACKEND=openai \
+  -e GMAIL_USER=you@gmail.com \
+  -e GMAIL_APP_PASSWORD="xxxx xxxx xxxx xxxx" \
+  -e STORAGE_SECRET=some-random-string \
+  imdb-autofill
 ```
 
-Returns a fixed sample record and exercises the full UI, persistence, review, and export workflow.
+Open `http://localhost:7860`.
 
 ## Usage
 
-1. Log in or create an account.
-2. Upload one or more product images (multiple angles of the same product at once works best — the pipeline groups them automatically).
+1. Sign up or log in.
+2. Upload one or more product images — multiple angles of the same product work best. The pipeline groups them automatically by the dataset label on the edge of the packaging.
 3. Wait for extraction — the grid updates when done.
-4. Review the row status:
+4. Review row confidence:
    - **Green** — high confidence, likely correct
    - **Yellow** — one or more fields need review
-   - **Red** — possible duplicate of an existing record
+   - **Red** — possible duplicate
 5. Click **Review** to open the side drawer: view the image carousel and edit any field.
-6. Save changes, then export CSV or Excel from the header.
+6. Export CSV or Excel from the header.
 
 ## Model Notes
 
-The pipeline uses **llama3.2-vision:11b** via Ollama's native `/api/chat` endpoint with structured output constraints (JSON schema). This eliminates JSON parsing failures and thinking-token overhead seen with other models.
+The pipeline uses **GPT-5.5** (`gpt-5.5-2026-04-23`) via the OpenAI API. Up to 8 images are sent in a single batched call, which groups multi-angle shots of the same product more reliably than per-image calls.
 
-Models evaluated during development:
+### Eval results (45-product dataset)
 
-| Model               | Accuracy  | Notes                                                      |
-|---------------------|-----------|------------------------------------------------------------|
-| llama3.2-vision:11b | Best      | No thinking mode, reliable structured output, 1 img/call  |
-| qwen3-vl:4b         | Good      | Works but thinking tokens can consume token budget         |
-| qwen3-vl:8b         | Unreliable| Thinking mode can't be suppressed via Ollama API           |
-| qwen2.5-vl:7b       | Poor      | Doesn't follow structured extraction prompts reliably      |
+| Model | Matched pairs | Overall accuracy |
+|-------|--------------|-----------------|
+| llama3.2-vision 11b (local) | 41 | 48.1% |
+| qwen2.5vl 32b (local) | 55 | 51.9% |
+| Gemini 2.5 Flash | 31 | 47.8% |
+| **GPT-5.5 (current)** | **44** | **~65%** |
 
-**Batching note:** llama3.2-vision via Ollama is limited to one image per API call. Multi-image batching (`VLM_BATCH_SIZE > 1`) requires a model and backend that supports multiple images per request.
+See `docs/model_selection.md` for the full model selection writeup.
 
 ## Project Structure
 
 ```
 backend/
-  pipeline.py       end-to-end orchestration
-  extractor.py      VLM calls, JSON parsing, field aggregation
-  barcode.py        pyzbar decoding with preprocessing fallbacks
-  normalizer.py     country corrections, barcode cleaning, duplicate detection
-  db.py             SQLite persistence and edit version history
-  schema.py         Pydantic models with per-field confidence scores
+  pipeline.py         end-to-end orchestration
+  extractor.py        VLM calls, batching, field aggregation, backend routing
+  barcode.py          pyzbar decoding with preprocessing fallbacks
+  normalizer.py       country corrections, barcode cleaning, fuzzy matching
+  db.py               SQLite persistence and edit version history
+  schema.py           Pydantic models with per-field confidence scores
+  utils.py            VLM call functions (OpenAI, Ollama, Gemini backends)
 core/prompts/
-  vlm_system_prompt.j2    field definitions and output contract
-  vlm_extraction_prompt.j2 per-image extraction instructions
+  vlm_system_prompt.j2        field definitions and output contract
+  vlm_extraction_prompt.j2    per-image extraction instructions
 frontend/
-  app.py            NiceGUI entry point and page registration
-  components.py     grid, review drawer, carousel, upload zone
-  handlers.py       upload, export, edit, and delete handlers
-  state.py          shared state, row mapping, export formatting
+  app.py              NiceGUI entry point and page registration
+  components.py       grid, review drawer, carousel, upload zone
+  auth_pages.py       login, signup, password reset pages
+  handlers.py         upload, export, edit, and delete handlers
+  state.py            shared state, row mapping, export formatting
 eval/
-  run_eval.py       full dataset pipeline run + accuracy report
-  metrics.py        field-level scoring against ground truth
+  run_eval.py         full dataset pipeline run + accuracy report
+  metrics.py          field-level scoring against ground truth
+docs/
+  model_selection.md  VLM model comparison and selection rationale
 ```

@@ -193,8 +193,9 @@ if __name__ in {"__main__", "__mp_main__"}:
     ui.run(
         favicon="🔎",
         title="IMDB AutoFill",
-        port=5200,
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "5200")),
         dark=True,
         reload=False,
-        storage_secret="imdb-secret-key",
+        storage_secret=os.getenv("STORAGE_SECRET", "imdb-secret-key"),
     )
