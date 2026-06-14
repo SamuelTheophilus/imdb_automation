@@ -22,6 +22,8 @@ dependencies = [
     "rapidfuzz>=3.14.5",
     "scikit-learn>=1.8.0",
     "tabulate>=0.10.0",
+    "zxing-cpp>=3.0.0",
+    "opencv-python-headless>=4.13.0.92",
 ]
 
 [dependency-groups]
