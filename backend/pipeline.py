@@ -148,6 +148,12 @@ async def run_pipeline(
         print("[pipeline] Normalizing fields...")
         record, normalized_fields = normalize_record(record)
 
+        # Drop records with no identifying information — these are empty VLM
+        # extractions from background/partial images with no readable product.
+        if not record.brand and not record.product_name and not record.manufacturer:
+            print("[pipeline] Skipping empty record (no brand, product_name, or manufacturer)")
+            continue
+
         print("[pipeline] Checking for duplicates...")
         duplicates = check_duplicate(record, existing_records=existing_records or [])
 

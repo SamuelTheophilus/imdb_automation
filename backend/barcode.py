@@ -70,8 +70,17 @@ def _pyzbar_decode(image: Image.Image) -> str | None:
     return decoded[0].data.decode("utf-8") if decoded else None
 
 
+_ZXING_FORMATS = (
+    zxingcpp.BarcodeFormat.EAN13
+    | zxingcpp.BarcodeFormat.EAN8
+    | zxingcpp.BarcodeFormat.UPCA
+    | zxingcpp.BarcodeFormat.UPCE
+    | zxingcpp.BarcodeFormat.Code128
+    | zxingcpp.BarcodeFormat.Code39
+)
+
 def _zxing_decode(image: Image.Image) -> str | None:
-    results = zxingcpp.read_barcodes(image)
+    results = zxingcpp.read_barcodes(image, formats=_ZXING_FORMATS)
     return results[0].text if results else None
 
 

@@ -11,7 +11,7 @@ from json import JSONDecodeError
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
-from PIL import Image
+from PIL import Image, ImageEnhance
 
 from backend.barcode import decode_barcode
 from backend.image_aggregation import group_by_tag_similarity
@@ -30,7 +30,7 @@ _MAX_ATTEMPTS = 3
 
 # llama3.2-vision tiles images dynamically. Capping at 512px keeps the visual
 # token count low without losing label legibility.
-_MAX_IMAGE_SIDE = 512
+_MAX_IMAGE_SIDE = 2048
 
 # Which backend to use. Set VLM_BACKEND to one of: ollama, openai, gemini.
 # Falls back to USE_LOCAL_MODEL for backward compatibility.
@@ -104,14 +104,17 @@ EXTRACTION_SCHEMA = {
 # ── Image encoding ───────────────────────────────────────────────────────────
 
 def _encode_image(image_path: str | Path) -> str:
-    """Resize to _MAX_IMAGE_SIDE and return a base64-encoded JPEG string."""
+    """Resize, enhance, and base64-encode an image for the VLM."""
     img = Image.open(image_path).convert("RGB")
     w, h = img.size
     if max(w, h) > _MAX_IMAGE_SIDE:
         scale = _MAX_IMAGE_SIDE / max(w, h)
         img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+    # Modest sharpness + contrast boost to make label text more legible
+    img = ImageEnhance.Sharpness(img).enhance(2.0)
+    img = ImageEnhance.Contrast(img).enhance(1.3)
     buf = BytesIO()
-    img.save(buf, format="JPEG", quality=85)
+    img.save(buf, format="JPEG", quality=90)
     return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 

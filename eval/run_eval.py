@@ -52,21 +52,30 @@ def group_sessions(image_dir: Path) -> dict[str, list[Path]]:
     return dict(groups)
 
 
-async def run_all(sessions: dict[str, list[Path]]) -> list[dict]:
+async def run_all(sessions: dict[str, list[Path]], concurrency: int = 10) -> list[dict]:
+    semaphore = asyncio.Semaphore(concurrency)
+    total = len(sessions)
+    results_map: dict[str, list[dict]] = {}
+
+    async def run_one(sid: str, paths: list[Path]) -> None:
+        async with semaphore:
+            print(f"[{sid}] starting ({len(paths)} images)...", flush=True)
+            t0 = time.perf_counter()
+            try:
+                results = await run_pipeline(paths, existing_records=[])
+                elapsed = time.perf_counter() - t0
+                print(f"[{sid}] done in {elapsed:.1f}s → {len(results)} product(s)")
+                results_map[sid] = [dict(r.to_dict(), _session=sid) for r in results]
+            except Exception as e:
+                print(f"[{sid}] ERROR: {e}")
+                results_map[sid] = []
+
+    await asyncio.gather(*[run_one(sid, paths) for sid, paths in sessions.items()])
+
+    # Preserve original session order in output
     predictions = []
-    for i, (sid, paths) in enumerate(sessions.items(), 1):
-        print(f"[{i}/{len(sessions)}] {sid} ({len(paths)} images) ...", end=" ", flush=True)
-        t0 = time.perf_counter()
-        try:
-            results = await run_pipeline(paths, existing_records=[])
-            elapsed = time.perf_counter() - t0
-            print(f"{elapsed:.1f}s  → {len(results)} product(s)")
-            for r in results:
-                d = r.to_dict()
-                d["_session"] = sid
-                predictions.append(d)
-        except Exception as e:
-            print(f"ERROR: {e}")
+    for sid in sessions:
+        predictions.extend(results_map.get(sid, []))
     return predictions
 
 

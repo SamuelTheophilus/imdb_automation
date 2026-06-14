@@ -22,3 +22,27 @@ variant               | product variant e.g. ORIGINAL, LOW FAT, LITE, CLASSIC. "
 fragrance_flavor      | the specific flavor, scent, or taste descriptor of the product. This includes food flavors (BEEF, STEW RAGOUT, SOUP, NOODLES, CHICKEN), beverage flavors (COLA, LEMON, STRAWBERRY, ORANGE, MULTI FRUIT, MALT), cosmetic fragrances (ROSE, CITRUS, JAPANESE CAMELLIA), and detergent scents (POWDER, FRESH). Extract the exact descriptor printed on the pack. "" if absent.
 addons                | extra items physically included in or with the pack. Look for text like "FREE", "BONUS", "INCLUDES" and copy it verbatim as printed (e.g. 7 FREE ENVELOPE, 5 FREE ENVELOPE, 1PCS 2G, SPOON INCLUDED, FREE CUP). Note: individually wrapped tea bags packaged in paper sleeves are called ENVELOPE on the label. "" if absent.
 tagline               | short marketing or descriptive claim printed on the pack. Can be a single word like PREMIUM or RICH, a product descriptor like TOMATE PUREE or CONCENTRATED DETERGENT, a health claim like SUPPORTS ENERGY RELEASE, or a longer phrase like LOW FAT SPREAD FOR BREAD or BRIGHT IMPRESS BRIGHT & GLOWING SKIN. Typically printed on the front or side panel. "" if absent.
+
+## EXAMPLES
+
+The following are correct extractions for reference. Use them to calibrate format, field scope, and edge cases.
+
+### Example 1 — Margarine tub (tagline as descriptive phrase)
+Label: Front shows "BLUE BAND" brand and "LOW FAT SPREAD FOR BREAD" below it. Weight "250G" printed prominently. Packaging is a plastic tub. Back panel: "Manufactured by UPFIELD". "Made in Ghana". Variant "ORIGINAL" printed on pack.
+{"tag_text":"GH000475001 BLUE BAND 250G PLASTIC TUB Front","category_type":"SALTED MARGARINE","manufacturer":"UPFIELD","brand":"BLUE BAND","product_name":"BLUE BAND SPREAD FOR BREAD","weight":"250G","packaging_type":"TUB","country_of_origin":"GHANA","promotional_messages":"","variant":"ORIGINAL","fragrance_flavor":"","addons":"","tagline":"LOW FAT SPREAD FOR BREAD"}
+
+### Example 2 — Black tea box (single-word tagline, sachet addon)
+Label: Front shows "TAPOK" brand, "PREMIUM BLACK TEA", and the word "PREMIUM" as a quality descriptor. Box contains 100 × 2G tea bags. A free sample sachet (1 piece, 2G) is included. Back: "Imported by ETKAF". "Product of India".
+{"tag_text":"C100011505 TAPOK PREMIUM BLACK TEA 2GX100PCS BOX Front","category_type":"BLACK TEA","manufacturer":"ETKAF","brand":"TAPOK","product_name":"PREMIUM BLACK TEA","weight":"2G","packaging_type":"BOX","country_of_origin":"INDIA","promotional_messages":"","variant":"","fragrance_flavor":"","addons":"1PCS 2G","tagline":"PREMIUM"}
+
+### Example 3 — Chocolate malt drink tin (health-claim tagline, brand = manufacturer company)
+Label: Front shows "MILO" brand, "400G" weight, and "SUPPORTS ENERGY RELEASE" as a health claim below the brand name. Packaging is a metal tin. Back: "Manufactured by NESTLÉ". "Made in Ghana". No flavor descriptor — the product type itself is chocolate malt.
+{"tag_text":"GH000089001 MILO 400G TIN Front","category_type":"CHOCOLATE DRINK","manufacturer":"NESTLE","brand":"MILO","product_name":"MILO CHOCOLATE MALT DRINK","weight":"400G","packaging_type":"TIN","country_of_origin":"GHANA","promotional_messages":"","variant":"","fragrance_flavor":"","addons":"","tagline":"SUPPORTS ENERGY RELEASE"}
+
+### Example 4 — Strawberry tea box (envelope addon, fruit flavor)
+Label: Front shows "ZESTA" brand, "STRAWBERRY" flavour, and "25 + 7 FREE" with envelope-style tea bags. Each bag weighs 1.8G. Back: "Manufactured by WATAWALA TEA CEYLON LTD". "Product of Sri Lanka". The 7 bonus bags are packaged in paper envelopes — label calls them ENVELOPE.
+{"tag_text":"GH000284001 ZESTA STRAWBERRY 57.6G BOX Front","category_type":"BLACK TEA","manufacturer":"WATAWALA TEA CEYLON LTD","brand":"ZESTA","product_name":"ZESTA STRAWBERRY TEA","weight":"1.8G","packaging_type":"BOX","country_of_origin":"SRI LANKA","promotional_messages":"","variant":"","fragrance_flavor":"STRAWBERRY","addons":"7 FREE ENVELOPE","tagline":""}
+
+### Example 5 — Beef seasoning sachet (meat type as fragrance_flavor, local brand as manufacturer)
+Label: Front shows "SISTER" brand and "BEEF" prominently — the flavour is BEEF, not STEW. Weight "10G" on sachet. Back: "Distributed by SISTER SARDINE & MACKEREL VENTURES" — the brand owner is also the distributor. "Made in Ghana". No tagline present.
+{"tag_text":"GH000244001 SISTER BEEF 10G SACHET Front","category_type":"SEASONING POWDER","manufacturer":"SISTER SARDINE & MACKEREL VENTURES","brand":"SISTER","product_name":"SISTER BEEF SEASONING POWDER","weight":"10G","packaging_type":"SACHET","country_of_origin":"GHANA","promotional_messages":"","variant":"","fragrance_flavor":"BEEF","addons":"","tagline":""}
