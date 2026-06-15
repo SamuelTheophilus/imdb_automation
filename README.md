@@ -136,6 +136,7 @@ Set these under **Settings → Variables and secrets** on your HF Space:
 | `GMAIL_APP_PASSWORD` | Yes      | Gmail App Password (not your account password)           |
 | `STORAGE_SECRET`     | Yes      | Any random string for NiceGUI session encryption         |
 | `VLM_BATCH_SIZE`     | No       | Images per API call (default `8`)                        |
+| `COMING_SOON_MODE`   | No       | Set to `YES` to show a public info page and redirect all routes — useful to block access while paying for API costs (default `NO`) |
 
 *Only one of `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` is required, depending on `VLM_BACKEND`.
 
