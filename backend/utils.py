@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from io import BytesIO
 
 import httpx
+from anthropic import AsyncAnthropic
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from PIL import Image
@@ -19,6 +20,9 @@ OPENAI_MODEL: str = os.getenv("OPENAI_VL_MODEL", "gpt-4o")
 
 # Gemini model, set via GEMINI_MODEL env var.
 GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
+# Anthropic model, set via ANTHROPIC_MODEL env var.
+ANTHROPIC_MODEL: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 
 
 class VLMImageData(BaseModel):
@@ -229,6 +233,53 @@ async def vlm_call_w_gemini(params: VLMCallParams) -> _NativeResponse:
         )
     else:
         print(f"[vlm call] got response from gemini | content_len={len(content_out)}")
+    return _NativeResponse(choices=[_NativeChoice(message=_NativeMessage(content=content_out))])
+
+
+async def vlm_call_w_anthropic(params: VLMCallParams) -> _NativeResponse:
+    """Fire one extraction request against the Anthropic API (Claude).
+
+    Images are sent as base64-encoded JPEG blocks interleaved with text labels.
+    The system prompt is passed as the top-level `system` parameter (Anthropic's
+    preferred placement, rather than a system-role message).
+    """
+    print(
+        f"[vlm call] sending request to anthropic for "
+        f"{params.description}... {ANTHROPIC_MODEL} in use....."
+    )
+
+    content: list[dict] = []
+    for idx, image_data in enumerate(params.image_data_list, start=1):
+        content.append({
+            "type": "text",
+            "text": f"Image {idx}\nImage Path: {image_data.img_path}",
+        })
+        content.append({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/jpeg",
+                "data": image_data.encoded_data,
+            },
+        })
+    content.append({"type": "text", "text": params.user_prompt})
+
+    client = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    response = await client.messages.create(
+        model=ANTHROPIC_MODEL,
+        max_tokens=4096,
+        system=params.system_prompt,
+        messages=[{"role": "user", "content": content}],
+    )
+
+    content_out = response.content[0].text if response.content else ""
+    usage = response.usage
+    print(
+        f"[vlm call] got response from anthropic | "
+        f"input_tokens={usage.input_tokens} "
+        f"output_tokens={usage.output_tokens} | "
+        f"content_len={len(content_out)}"
+    )
     return _NativeResponse(choices=[_NativeChoice(message=_NativeMessage(content=content_out))])
 
 

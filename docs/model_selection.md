@@ -78,7 +78,7 @@ Note: 55 matched pairs > 45 GT because the model was over-splitting some product
 
 ---
 
-## Phase 4 — GPT-5.5 (OpenAI, Cloud) ← Current
+## Phase 4 — GPT-5.5 (OpenAI, Cloud)
 
 **Why we chose this:** After Gemini's failure on `tag_text` reading, GPT-5.5 was evaluated as the strongest available vision model. It demonstrated noticeably better spatial awareness and OCR of small printed text, including the edge dataset labels.
 
@@ -155,3 +155,69 @@ Batch size is set to 1 for Ollama (memory constraints) and up to 8 for cloud bac
 4. **Spatial awareness** — correctly identifies which text is on the front vs. back vs. edge of a product
 
 The main cost consideration is GPT-5.5 pricing ($5/$30 per 1M input/output tokens). For a 45-product eval at batch_size=8, cost is modest, but production scale needs monitoring.
+
+**Why we moved on:**
+- 6 sessions (8-image batches) consistently returned empty content across all 3 retries — likely OpenAI's content filter silently refusing certain product images
+- Each failed session took 1300s before giving up (3× retry × ~430s/attempt)
+- 34/45 products matched due to the 6 total failures
+
+---
+
+## Phase 5 — Claude Sonnet 4.6 (Anthropic, Cloud) ← Current
+
+**Why we chose this:** After diagnosing the GPT-5.5 empty content failures, Claude Sonnet 4.6 was tested on the 6 failed sessions. All 6 completed successfully in 15–75s each, with no empty responses. The decision was made to switch the full pipeline to Claude.
+
+**Configuration:**
+- Model: `claude-sonnet-4-6` via Anthropic SDK
+- Backend: `anthropic` (via `VLM_BACKEND=anthropic`)
+- Batch size: 8 images per API call (unchanged)
+- API params: `max_tokens=4096`, system prompt as top-level `system` parameter
+- Images: base64-encoded JPEG blocks in user content array
+
+**Key integration notes:**
+- Anthropic's native SDK uses a different image format than OpenAI (`source.type: "base64"` blocks)
+- System prompt is passed as the `system` parameter, not as a `role: "system"` message
+- No `response_format` equivalent — prompt instructs JSON output directly
+- Message Batches API (50% off): `eval/run_eval_batch.py` submits all 42 VLM requests as one batch
+
+**Eval progression (Claude Sonnet 4.6):**
+
+| Version | Key changes | Matched | Overall |
+|---------|-------------|---------|---------|
+| v1 (baseline) | Switch from GPT-5.5 | 41 | 76.3% |
+| v2 | Country: company address > "Made in" + Example 6 | 42 | 76.7% |
+| v3 | Tagline: non-strict + shortest descriptor; brand accent norm | 42 | 77.3% |
+| v4 | fragrance_flavor: non-strict + detergent POWDER; manufacturer normalizer | 42 | 79.0% |
+| v5 | Weight normalizer (GMS→G, G→KG, ML→L); addons: non-strict | 42 | 79.6% |
+| **v6** | Brand: trade name vs manufacturer distinction | **44** | **79.9%** |
+
+### v6 Field Breakdown (final, 44/45 matched)
+
+| Field | Accuracy |
+|-------|----------|
+| variant | 100.0% |
+| brand | 97.7% |
+| category_type | 90.9% |
+| country_of_origin | 88.9% |
+| packaging_type | 88.6% |
+| product_name | 86.4% |
+| weight | 81.8% |
+| addons | 75.0% |
+| tagline | 72.7% |
+| fragrance_flavor | 73.1% |
+| manufacturer | 63.6% |
+| barcode | 58.1% |
+| promotional_messages | 33.3% |
+| **OVERALL** | **79.9%** |
+
+### Why Claude Sonnet 4.6 Wins
+
+1. **Zero empty-content failures** — processed all 41 sessions (including 8–10 image batches) with no silent refusals
+2. **Speed** — 15–75s per session vs 300–1300s for GPT-5.5
+3. **Instruction following** — responds well to field priority rules (tagline shortest-first, country company address, brand trade name)
+4. **Cost** — Anthropic Batch API at 50% discount makes full evals ~2× cheaper than GPT-5.5 standard
+
+**Remaining hard limits (not model-dependent):**
+- Manufacturer (63.6%): GT is inconsistent — sometimes wants the manufacturer, sometimes the local distributor
+- Barcode (58.1%): 16 sessions have no barcode visible in any image
+- Promotional messages (33.3%): only 3 GT products have promos, high variance

@@ -29,16 +29,16 @@ Product images (multiple angles)
 Image grouping  ←── edge label (tag_text) similarity
         │
         ▼
-Barcode decoding  ←── pyzbar with preprocessing fallbacks
-        │
-        ▼
-VLM extraction  ←── GPT-5.5 vision model (batch of up to 8 images per call)
+VLM extraction  ←── Claude Sonnet 4.6 (batch of up to 8 images per call)
         │
         ▼
 Field aggregation  ←── majority vote across image faces
         │
         ▼
-Normalisation  ←── country corrections, barcode cleaning, fuzzy brand matching
+Barcode decoding  ←── pyzbar → zxing-cpp → CLAHE+adaptive threshold (3-pass)
+        │
+        ▼
+Normalisation  ←── country corrections, weight conversion, fuzzy brand matching
         │
         ▼
 Duplicate detection  ←── barcode + fuzzy brand/name matching
@@ -57,7 +57,7 @@ Editable UI review → CSV / Excel export
 | BRAND            | Brand name on pack                            |
 | WEIGHT           | Combined weight + unit e.g. `100G`, `1.5 KG` |
 | PACKAGING TYPE   | e.g. `BOX`, `SACHET`, `TUB`, `GLASS JAR`     |
-| COUNTRY          | Country of manufacture                        |
+| COUNTRY          | Country of origin                             |
 | VARIANT          | e.g. `ORIGINAL`, `LOW FAT`                   |
 | TYPE             | Product category e.g. `MARGARINE`, `SOAP`    |
 | FRAGRANCE_FLAVOR | Flavour or scent where applicable             |
@@ -65,55 +65,81 @@ Editable UI review → CSV / Excel export
 | ADDONS           | Extra pack contents                           |
 | TAGLINE          | Short slogan or descriptive tagline           |
 
-## Environment Variables (Secrets)
+---
 
-Set these as Hugging Face Spaces secrets (Settings → Variables and secrets):
+## Quick Start (from git clone)
 
-| Variable             | Required | Description                                             |
-|----------------------|----------|---------------------------------------------------------|
-| `OPENAI_API_KEY`     | Yes      | OpenAI API key for GPT-5.5 vision extraction           |
-| `OPENAI_VL_MODEL`    | Yes      | Model name — `gpt-5.5-2026-04-23`                      |
-| `VLM_BACKEND`        | Yes      | Set to `openai`                                         |
-| `GMAIL_USER`         | Yes      | Gmail address for password reset emails                 |
-| `GMAIL_APP_PASSWORD` | Yes      | Gmail App Password (not your real password)             |
-| `STORAGE_SECRET`     | Yes      | Any random string for NiceGUI session encryption        |
-| `VLM_BATCH_SIZE`     | No       | Images per API call (default `8`)                       |
+### Prerequisites
 
-## Running Locally
-
-**Requirements:** Python 3.13+, `uv`, `libzbar0`
+- Python 3.13+
+- [`uv`](https://github.com/astral-sh/uv) — fast Python package manager
+- `zbar` system library (for barcode decoding)
 
 ```bash
 # macOS
 brew install zbar
 
-# Linux
+# Ubuntu / Debian
 sudo apt-get install libzbar0
 ```
 
+### 1. Clone and install
+
 ```bash
+git clone https://github.com/SamuelTheophilus/imdb-autofill.git
+cd imdb-autofill
 uv sync
-cp .env.example .env   # fill in your API keys
+```
+
+### 2. Configure environment
+
+```bash
+cp .env.example .env
+```
+
+Open `.env` and fill in at minimum:
+
+```env
+VLM_BACKEND=anthropic
+ANTHROPIC_API_KEY=sk-ant-...     # get from console.anthropic.com
+GMAIL_USER=you@gmail.com
+GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx   # Google App Password
+STORAGE_SECRET=any-random-string
+```
+
+> **Gmail App Password:** Go to [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords), create an app password for "Mail", and paste the 16-character code.
+
+### 3. Run
+
+```bash
 uv run python -m frontend.app
 ```
 
-Open `http://localhost:5200`.
+Open [http://localhost:5200](http://localhost:5200).
 
-## Rebuilding with Docker
+---
 
-```bash
-docker build -t imdb-autofill .
-docker run -p 7860:7860 \
-  -e OPENAI_API_KEY=sk-... \
-  -e OPENAI_VL_MODEL=gpt-5.5-2026-04-23 \
-  -e VLM_BACKEND=openai \
-  -e GMAIL_USER=you@gmail.com \
-  -e GMAIL_APP_PASSWORD="xxxx xxxx xxxx xxxx" \
-  -e STORAGE_SECRET=some-random-string \
-  imdb-autofill
-```
+## Environment Variables
 
-Open `http://localhost:7860`.
+### Hugging Face Spaces secrets
+
+Set these under **Settings → Variables and secrets** on your HF Space:
+
+| Variable             | Required | Description                                              |
+|----------------------|----------|----------------------------------------------------------|
+| `VLM_BACKEND`        | Yes      | `anthropic` (recommended) or `openai`                    |
+| `ANTHROPIC_API_KEY`  | Yes*     | Anthropic API key — required if `VLM_BACKEND=anthropic`  |
+| `ANTHROPIC_MODEL`    | No       | Default: `claude-sonnet-4-6`                             |
+| `OPENAI_API_KEY`     | Yes*     | OpenAI API key — required if `VLM_BACKEND=openai`        |
+| `OPENAI_VL_MODEL`    | No       | Default: `gpt-5.5-2026-04-23`                            |
+| `GMAIL_USER`         | Yes      | Gmail address for password reset emails                  |
+| `GMAIL_APP_PASSWORD` | Yes      | Gmail App Password (not your account password)           |
+| `STORAGE_SECRET`     | Yes      | Any random string for NiceGUI session encryption         |
+| `VLM_BATCH_SIZE`     | No       | Images per API call (default `8`)                        |
+
+*Only one of `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` is required, depending on `VLM_BACKEND`.
+
+---
 
 ## Usage
 
@@ -127,9 +153,11 @@ Open `http://localhost:7860`.
 5. Click **Review** to open the side drawer: view the image carousel and edit any field.
 6. Export CSV or Excel from the header.
 
+---
+
 ## Model Notes
 
-The pipeline uses **GPT-5.5** (`gpt-5.5-2026-04-23`) via the OpenAI API. Up to 8 images are sent in a single batched call, which groups multi-angle shots of the same product more reliably than per-image calls.
+The pipeline uses **Claude Sonnet 4.6** (`claude-sonnet-4-6`) via the Anthropic API. Up to 8 images are sent in a single batched call, which groups multi-angle shots of the same product more reliably than per-image calls.
 
 ### Eval results (45-product dataset)
 
@@ -138,9 +166,29 @@ The pipeline uses **GPT-5.5** (`gpt-5.5-2026-04-23`) via the OpenAI API. Up to 8
 | llama3.2-vision 11b (local) | 41 | 48.1% |
 | qwen2.5vl 32b (local) | 55 | 51.9% |
 | Gemini 2.5 Flash | 31 | 47.8% |
-| **GPT-5.5 (current)** | **44** | **~65%** |
+| GPT-5.5 | 34 | 73.2% |
+| **Claude Sonnet 4.6 (current)** | **44** | **79.9%** |
 
-See `docs/model_selection.md` for the full model selection writeup.
+See `docs/model_selection.md` for the full model selection writeup and `docs/extraction_improvements.md` for all accuracy improvements.
+
+---
+
+## Docker (self-hosted)
+
+```bash
+docker build -t imdb-autofill .
+docker run -p 7860:7860 \
+  -e VLM_BACKEND=anthropic \
+  -e ANTHROPIC_API_KEY=sk-ant-... \
+  -e GMAIL_USER=you@gmail.com \
+  -e GMAIL_APP_PASSWORD="xxxx xxxx xxxx xxxx" \
+  -e STORAGE_SECRET=some-random-string \
+  imdb-autofill
+```
+
+Open [http://localhost:7860](http://localhost:7860).
+
+---
 
 ## Project Structure
 
@@ -148,13 +196,13 @@ See `docs/model_selection.md` for the full model selection writeup.
 backend/
   pipeline.py         end-to-end orchestration
   extractor.py        VLM calls, batching, field aggregation, backend routing
-  barcode.py          pyzbar decoding with preprocessing fallbacks
-  normalizer.py       country corrections, barcode cleaning, fuzzy matching
+  barcode.py          3-pass barcode extraction (pyzbar, zxing-cpp, CLAHE+adaptive)
+  normalizer.py       country corrections, weight conversion, barcode cleaning, fuzzy matching
   db.py               SQLite persistence and edit version history
   schema.py           Pydantic models with per-field confidence scores
-  utils.py            VLM call functions (OpenAI, Ollama, Gemini backends)
+  utils.py            VLM call functions (Anthropic, OpenAI, Gemini, Ollama backends)
 core/prompts/
-  vlm_system_prompt.j2        field definitions and output contract
+  vlm_system_prompt.j2        field definitions, output contract, and few-shot examples
   vlm_extraction_prompt.j2    per-image extraction instructions
 frontend/
   app.py              NiceGUI entry point and page registration
@@ -163,8 +211,10 @@ frontend/
   handlers.py         upload, export, edit, and delete handlers
   state.py            shared state, row mapping, export formatting
 eval/
-  run_eval.py         full dataset pipeline run + accuracy report
+  run_eval.py         parallel eval runner with --sessions flag
+  run_eval_batch.py   Anthropic Batch API eval (50% cost vs standard API)
   metrics.py          field-level scoring against ground truth
 docs/
-  model_selection.md  VLM model comparison and selection rationale
+  model_selection.md        VLM model comparison and selection rationale
+  extraction_improvements.md all accuracy improvements with diagnosis and impact
 ```

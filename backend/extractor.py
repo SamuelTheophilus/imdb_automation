@@ -11,12 +11,12 @@ from json import JSONDecodeError
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
-from PIL import Image
+from PIL import Image, ImageEnhance
 
 from backend.barcode import decode_barcode
 from backend.image_aggregation import group_by_tag_similarity
 from backend.schema import IMDBRecordWithConfidence
-from backend.utils import VLMCallParams, VLMImageData, vlm_call_w_ollama, vlm_call_w_openai, vlm_call_w_gemini
+from backend.utils import VLMCallParams, VLMImageData, vlm_call_w_anthropic, vlm_call_w_ollama, vlm_call_w_openai, vlm_call_w_gemini
 
 # ── Prompt templates ────────────────────────────────────────────────────────
 jinja_templates_folder = f"{Path(__file__).parent.parent}/core/prompts"
@@ -30,13 +30,13 @@ _MAX_ATTEMPTS = 3
 
 # llama3.2-vision tiles images dynamically. Capping at 512px keeps the visual
 # token count low without losing label legibility.
-_MAX_IMAGE_SIDE = 512
+_MAX_IMAGE_SIDE = 2048
 
 # Which backend to use. Set VLM_BACKEND to one of: ollama, openai, gemini.
 # Falls back to USE_LOCAL_MODEL for backward compatibility.
 def _resolve_backend() -> str:
     explicit = os.getenv("VLM_BACKEND", "").strip().lower()
-    if explicit in ("ollama", "openai", "gemini"):
+    if explicit in ("ollama", "openai", "gemini", "anthropic"):
         return explicit
     return "ollama" if os.getenv("USE_LOCAL_MODEL", "YES").strip().upper() == "YES" else "openai"
 
@@ -62,6 +62,8 @@ def _get_semaphore() -> asyncio.Semaphore:
 
 async def _vlm_call(params: VLMCallParams):
     """Route the VLM call to the configured backend."""
+    if _VLM_BACKEND == "anthropic":
+        return await vlm_call_w_anthropic(params)
     if _VLM_BACKEND == "gemini":
         return await vlm_call_w_gemini(params)
     if _VLM_BACKEND == "openai":
@@ -104,14 +106,17 @@ EXTRACTION_SCHEMA = {
 # ── Image encoding ───────────────────────────────────────────────────────────
 
 def _encode_image(image_path: str | Path) -> str:
-    """Resize to _MAX_IMAGE_SIDE and return a base64-encoded JPEG string."""
+    """Resize, enhance, and base64-encode an image for the VLM."""
     img = Image.open(image_path).convert("RGB")
     w, h = img.size
     if max(w, h) > _MAX_IMAGE_SIDE:
         scale = _MAX_IMAGE_SIDE / max(w, h)
         img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+    # Modest sharpness + contrast boost to make label text more legible
+    img = ImageEnhance.Sharpness(img).enhance(2.0)
+    img = ImageEnhance.Contrast(img).enhance(1.3)
     buf = BytesIO()
-    img.save(buf, format="JPEG", quality=85)
+    img.save(buf, format="JPEG", quality=90)
     return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 
@@ -347,9 +352,9 @@ def _record_from_group(
     country_of_origin    = _most_common_text(group_items, "country_of_origin")
     promotional_messages = _most_common_text(group_items, "promotional_messages", strict=True)
     variant              = _most_common_text(group_items, "variant",              strict=True)
-    fragrance_flavor     = _most_common_text(group_items, "fragrance_flavor",     strict=True)
-    addons               = _most_common_text(group_items, "addons",               strict=True)
-    tagline              = _most_common_text(group_items, "tagline",              strict=True)
+    fragrance_flavor     = _most_common_text(group_items, "fragrance_flavor")
+    addons               = _most_common_text(group_items, "addons")
+    tagline              = _most_common_text(group_items, "tagline")
 
     record = IMDBRecordWithConfidence(
         barcode=_as_text(barcode_value),
