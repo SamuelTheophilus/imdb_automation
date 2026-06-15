@@ -1,3 +1,4 @@
+import shutil
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -10,10 +11,34 @@ from backend.pipeline import PipelineResult, run_pipeline
 from frontend.auth_pages import current_user
 from frontend.state import FIELDS, get_grid, result_to_row, row_data, row_to_export_dict
 
+SAMPLES: dict[str, dict] = {
+    "milo": {
+        "label": "MILO + BLUE BAND",
+        "category": "Chocolate Drink · Margarine",
+        "note": "7 images · 2 products",
+        "dir": Path("data/samples/milo"),
+        "thumbnail": "/samples/milo/S233576818_584688925.jpg",
+    },
+    "lux": {
+        "label": "LUX Bright Impress",
+        "category": "Bar Soap",
+        "note": "4 images · 1 product",
+        "dir": Path("data/samples/lux"),
+        "thumbnail": "/samples/lux/S233457181_584380459.jpg",
+    },
+    "vibe": {
+        "label": "VIBE Energy",
+        "category": "Energy Drink",
+        "note": "6 images · 1 product",
+        "dir": Path("data/samples/vibe"),
+        "thumbnail": "/samples/vibe/S231045463_577932905.jpg",
+    },
+}
+
 
 async def handle_batch_upload(e: events.MultiUploadEventArguments):
     # Import here to avoid a circular import (components imports handlers).
-    from frontend.components import hide_processing, show_processing, update_processing
+    from frontend.components import hide_processing, show_processing
 
     client = ui.context.client
     user = current_user()
@@ -42,12 +67,10 @@ async def handle_batch_upload(e: events.MultiUploadEventArguments):
         if len(saved_paths) == 1
         else f"{len(saved_paths)} images"
     )
-    show_processing(f"Analyzing {upload_label} with Claude Sonnet…")
+    show_processing(f"Processing {upload_label}…")
 
     try:
-        results: list[PipelineResult] = await run_pipeline(
-            saved_paths, on_progress=update_processing
-        )
+        results: list[PipelineResult] = await run_pipeline(saved_paths)
     except Exception as exc:
         if getattr(client, "_deleted", False):
             return
@@ -147,3 +170,56 @@ def do_delete_row(row: dict) -> None:
         p = Path(raw_path)
         if p.exists():
             p.unlink()
+
+
+async def handle_sample(sample_key: str) -> None:
+    from frontend.components import hide_processing, show_processing
+
+    sample = SAMPLES.get(sample_key)
+    if not sample:
+        return
+
+    user = current_user()
+    if not user:
+        ui.notify("Please log in before running a sample", type="warning", position="center")
+        return
+
+    upload_dir = Path("data/uploads")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    # Copy sample images into uploads/ with unique names so they're served correctly
+    saved_paths: list[Path] = []
+    for src in sorted(sample["dir"].glob("*.jpg")):
+        dst = upload_dir / f"sample_{sample_key}_{uuid4().hex[:8]}{src.suffix}"
+        shutil.copy2(src, dst)
+        saved_paths.append(dst)
+
+    show_processing(f"Processing {sample['label']}…")
+
+    try:
+        results: list[PipelineResult] = await run_pipeline(saved_paths)
+    except Exception as exc:
+        hide_processing()
+        ui.notify(f"Sample extraction failed: {exc}", type="negative", position="center")
+        return
+
+    for result in results:
+        extraction_id = create_extraction(
+            user_id=user["id"],
+            original_filename=f"[Sample] {sample['label']}",
+            result=result,
+        )
+        row = result_to_row(result, len(row_data))
+        row["db_id"] = extraction_id
+        row_data.append(row)
+
+    grid = get_grid()
+    if grid:
+        grid.options["rowData"] = list(row_data)
+        grid.update()
+
+    hide_processing()
+
+    n = len(results)
+    label = "product" if n == 1 else "products"
+    ui.notify(f"{n} {label} extracted from {sample['label']} sample", type="positive", position="center")

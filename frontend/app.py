@@ -6,7 +6,6 @@ from nicegui import app, ui
 
 # Importing this module registers the /login and /signup pages with NiceGUI.
 import frontend.auth_pages  # noqa: F401
-from frontend.info_page import register_coming_soon
 from backend.db import init_db, list_extraction_versions, list_user_extractions
 from backend.normalizer import load_canonical_brands
 from frontend.auth_pages import require_user
@@ -18,6 +17,7 @@ from frontend.components import (
     render_review_drawer,
     render_upload_zone,
 )
+from frontend.info_page import register_coming_soon
 from frontend.state import db_record_to_row, row_data
 from frontend.styles import STYLES
 from frontend.tour import TOUR_JS, TOUR_SAMPLE_ROW
@@ -30,11 +30,12 @@ _DRIVER_CDN = (
     "</script>"
 )
 UPLOAD_DIR = Path("data/uploads")
+SAMPLES_DIR = Path("data/samples")
 
-# Expose uploaded images as normal static files. AG Grid rows only store these
-# short URLs, which keeps click/edit websocket payloads small.
+# Expose uploaded and sample images as static files.
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 app.add_static_files("/uploads", UPLOAD_DIR)
+app.add_static_files("/samples", SAMPLES_DIR)
 
 
 def _launch_tour(client=None) -> None:
@@ -196,7 +197,7 @@ if __name__ in {"__main__", "__mp_main__"}:
         favicon="🔎",
         title="IMDB AutoFill",
         host="0.0.0.0",
-        port=int(os.getenv("PORT", "5200")),
+        port=int(os.getenv("PORT", "5300")),
         dark=True,
         reload=False,
         storage_secret=os.getenv("STORAGE_SECRET", "imdb-secret-key"),

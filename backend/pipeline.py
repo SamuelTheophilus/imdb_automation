@@ -1,8 +1,6 @@
 # backend/pipeline.py
 
-import asyncio
 import os
-from collections.abc import Callable
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -68,7 +66,6 @@ class PipelineResult:
 async def run_pipeline(
     image_paths: list[str] | list[Path],
     existing_records: list[dict] | None = None,
-    on_progress: Callable[[str], None] | None = None,
 ) -> list[PipelineResult]:
     """Run the full extraction pipeline on a list of product images.
 
@@ -143,9 +140,6 @@ async def run_pipeline(
         await extract_information_from_images(verified_paths)
     )
 
-    if on_progress:
-        on_progress("Normalizing fields…")
-        await asyncio.sleep(0)  # yield so NiceGUI flushes the label update
     pipeline_results: list[PipelineResult] = []
     for record, group_paths in extracted_products:
         print("[pipeline] Normalizing fields...")

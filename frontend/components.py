@@ -6,12 +6,15 @@ from backend.db import update_extraction_image_paths, update_extraction_status
 from frontend.auth_pages import current_user, logout, render_change_password_dialog
 from frontend.tour import TOUR_JS, TOUR_SAMPLE_ROW
 from frontend.handlers import (
+    SAMPLES,
     do_delete_row,
     do_export_csv,
     do_export_excel,
     handle_batch_upload,
+    handle_sample,
     persist_row_edits,
 )
+
 from frontend.state import FIELDS, build_column_defs, get_grid, image_to_url, row_data, set_grid
 
 review_drawer = None
@@ -36,45 +39,70 @@ def _on_slide_change(e) -> None:
         pass
 
 # ── Processing toast ─────────────────────────────────────────────────────────
-_processing_element = None
-_processing_label = None
+# Injected as plain HTML+JS so ui.run_javascript() reliably updates it from
+# any async handler without needing NiceGUI element context.
+
+_PROC_HEAD = """
+<style>
+  @keyframes _proc_spin { to { transform: rotate(360deg); } }
+  #_proc_card {
+    display: none;
+    position: fixed; bottom: 24px; right: 24px; z-index: 9900;
+    background: #1a1a2e;
+    border: 1px solid rgba(99,102,241,0.3);
+    border-radius: 10px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+    padding: 10px 16px;
+    align-items: center; gap: 10px;
+    font-family: Inter, sans-serif;
+  }
+  #_proc_spinner {
+    width: 14px; height: 14px; flex-shrink: 0;
+    border: 2px solid rgba(99,102,241,0.2);
+    border-top-color: #6366f1;
+    border-radius: 50%;
+    animation: _proc_spin 0.7s linear infinite;
+  }
+  #_proc_label { color: #c4c4d4; font-size: 12px; white-space: nowrap; }
+  #_proc_close {
+    background: none; border: none; cursor: pointer;
+    color: #4b5563; font-size: 13px; line-height: 1;
+    padding: 0 2px; margin-left: 2px;
+  }
+  #_proc_close:hover { color: #9ca3af; }
+</style>
+<script>
+  function _procShow(msg) {
+    document.getElementById('_proc_label').textContent = msg;
+    document.getElementById('_proc_card').style.display = 'flex';
+  }
+  function _procHide() {
+    document.getElementById('_proc_card').style.display = 'none';
+  }
+</script>
+"""
+
+_PROC_DIVS = """
+<div id="_proc_card">
+  <div id="_proc_spinner"></div>
+  <span id="_proc_label">Processing…</span>
+  <button id="_proc_close" onclick="_procHide()" title="Dismiss">&#x2715;</button>
+</div>
+"""
 
 
 def render_processing_overlay() -> None:
-    """Create a fixed bottom-right processing indicator (hidden initially)."""
-    global _processing_element, _processing_label
-    with ui.element("div").style(
-        "position:fixed; bottom:24px; right:24px; z-index:9000;"
-    ) as _processing_element:
-        with ui.card().tight().classes("px-4 py-3").style(
-            "background:#16162a; border:1px solid rgba(99,102,241,0.3);"
-            "border-radius:10px; box-shadow:0 4px 24px rgba(0,0,0,0.5);"
-        ):
-            with ui.row().classes("items-center gap-3"):
-                ui.spinner(size="1rem", color="indigo")
-                _processing_label = ui.label("Processing…").classes("text-sm").style(
-                    "color:#c4c4d4; font-family:Inter,sans-serif; white-space:nowrap;"
-                )
-                ui.button(icon="close", on_click=hide_processing).props(
-                    "flat round dense"
-                ).style("color:#475569; width:22px; height:22px;")
-    _processing_element.set_visibility(False)
+    ui.add_head_html(_PROC_HEAD)
+    ui.html(_PROC_DIVS)
 
 
 def show_processing(message: str = "Processing…") -> None:
-    if _processing_element and _processing_label:
-        _processing_label.text = message
-        _processing_element.set_visibility(True)
-
-
-def update_processing(message: str) -> None:
-    if _processing_label:
-        _processing_label.text = message
+    import json
+    ui.run_javascript(f"_procShow({json.dumps(message)})")
 
 
 def hide_processing() -> None:
-    if _processing_element:
-        _processing_element.set_visibility(False)
+    ui.run_javascript("_procHide()")
 
 
 # ── Tour ─────────────────────────────────────────────────────────────────────
@@ -533,6 +561,51 @@ def render_upload_zone():
         ).props('accept=".jpg,.jpeg,.png,.webp" flat label=""').classes(
             "upload-zone-cover"
         )
+
+    # ── Sample picker ──────────────────────────────────────────────────────────
+    with ui.row().classes("w-full justify-center items-center gap-2 mt-2"):
+        ui.label("or").style("color:#334155; font-size:12px;")
+        toggle_label = ui.label("try a sample →").style(
+            "color:#6366f1; font-size:12px; cursor:pointer;"
+            "font-family:Inter,sans-serif; font-weight:500;"
+        )
+
+    cards_container = ui.row().classes("w-full gap-3 mt-1")
+    cards_container.set_visibility(False)
+
+    with cards_container:
+        for key, meta in SAMPLES.items():
+            with ui.card().tight().classes("flex-1 cursor-pointer").style(
+                "background:#0f1117; border:1px solid #1e1e2e;"
+                "border-radius:10px; overflow:hidden;"
+            ).on("click", lambda e, k=key: handle_sample(k)):
+                ui.image(meta["thumbnail"]).style(
+                    "width:100%; height:110px; object-fit:cover;"
+                )
+                with ui.column().classes("px-3 py-2 gap-1"):
+                    with ui.row().classes("items-center justify-between w-full"):
+                        ui.label(meta["label"]).style(
+                            "color:#e2e2f0; font-size:12px; font-weight:600;"
+                            "font-family:Inter,sans-serif;"
+                        )
+                        ui.badge("Sample").props("outline color=indigo").style(
+                            "font-size:9px;"
+                        )
+                    ui.label(meta["category"]).style(
+                        "color:#6b7280; font-size:11px; font-family:Inter,sans-serif;"
+                    )
+                    ui.label(meta["note"]).style(
+                        "color:#374151; font-size:10px; font-family:Inter,sans-serif;"
+                    )
+
+    _sample_open = [False]
+
+    def _toggle_samples():
+        _sample_open[0] = not _sample_open[0]
+        cards_container.set_visibility(_sample_open[0])
+        toggle_label.text = "hide samples ↑" if _sample_open[0] else "try a sample →"
+
+    toggle_label.on("click", _toggle_samples)
 
 
 # ── Legend ───────────────────────────────────────────────────────────────────
