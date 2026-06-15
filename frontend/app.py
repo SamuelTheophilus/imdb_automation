@@ -188,7 +188,7 @@ if __name__ in {"__main__", "__mp_main__"}:
     if brands_csv.exists():
         load_canonical_brands(brands_csv)
 
-    print("[APP] stating application.")
+    print("[APP] starting application.")
 
     ui.run(
         favicon="🔎",
