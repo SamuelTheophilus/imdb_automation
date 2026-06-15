@@ -1,3 +1,4 @@
+from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -12,7 +13,7 @@ from frontend.state import FIELDS, get_grid, result_to_row, row_data, row_to_exp
 
 async def handle_batch_upload(e: events.MultiUploadEventArguments):
     # Import here to avoid a circular import (components imports handlers).
-    from frontend.components import hide_processing, show_processing
+    from frontend.components import hide_processing, show_processing, update_processing
 
     client = ui.context.client
     user = current_user()
@@ -41,10 +42,12 @@ async def handle_batch_upload(e: events.MultiUploadEventArguments):
         if len(saved_paths) == 1
         else f"{len(saved_paths)} images"
     )
-    show_processing(f"Processing {upload_label}…")
+    show_processing(f"Analyzing {upload_label} with Claude Sonnet…")
 
     try:
-        results: list[PipelineResult] = await run_pipeline(saved_paths)
+        results: list[PipelineResult] = await run_pipeline(
+            saved_paths, on_progress=update_processing
+        )
     except Exception as exc:
         if getattr(client, "_deleted", False):
             return
@@ -85,12 +88,19 @@ async def handle_batch_upload(e: events.MultiUploadEventArguments):
         ui.notify(f"{n} {label} extracted", type="positive", position="center")
 
 
+def _export_filename(ext: str) -> str:
+    user = current_user()
+    username = (user["username"] if user else "user").lower().replace(" ", "_")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"imdb_autofill_export_{username}_{timestamp}.{ext}"
+
+
 def do_export_csv():
     if not row_data:
         ui.notify("No data to export yet", type="warning", position="center")
         return
     df = pd.DataFrame([row_to_export_dict(row) for row in row_data])
-    path = Path("data/predictions.csv")
+    path = Path("data") / _export_filename("csv")
     path.parent.mkdir(exist_ok=True)
     df.to_csv(path, index=False)
     ui.download(str(path))
@@ -102,9 +112,15 @@ def do_export_excel():
         ui.notify("No data to export yet", type="warning", position="center")
         return
     df = pd.DataFrame([row_to_export_dict(row) for row in row_data])
-    path = Path("data/predictions.xlsx")
+    path = Path("data") / _export_filename("xlsx")
     path.parent.mkdir(exist_ok=True)
-    df.to_excel(path, index=False)
+    with pd.ExcelWriter(path, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="Sheet1")
+        ws = writer.sheets["Sheet1"]
+        from openpyxl.styles import Font
+        bold = Font(bold=True)
+        for cell in ws[1]:
+            cell.font = bold
     ui.download(str(path))
     ui.notify("Excel exported", type="positive", position="center")
 

@@ -35,34 +35,46 @@ def _on_slide_change(e) -> None:
     except Exception:
         pass
 
-# ── Processing overlay ───────────────────────────────────────────────────────
-# A persistent dialog shown during pipeline runs. Matches the user's mental
-# model of "something is happening" better than a bottom-corner spinner.
-_processing_dialog = None
+# ── Processing toast ─────────────────────────────────────────────────────────
+_processing_element = None
 _processing_label = None
 
 
 def render_processing_overlay() -> None:
-    """Create the fullscreen processing dialog (hidden initially)."""
-    global _processing_dialog, _processing_label
-    _processing_dialog = ui.dialog().props("persistent")
-    with _processing_dialog:
-        with ui.card().classes("processing-card items-center gap-4 px-8 py-7"):
-            ui.spinner(size="2.5rem", color="indigo")
-            _processing_label = ui.label("Processing…").classes(
-                "text-sm text-slate-300 font-medium"
-            )
+    """Create a fixed bottom-right processing indicator (hidden initially)."""
+    global _processing_element, _processing_label
+    with ui.element("div").style(
+        "position:fixed; bottom:24px; right:24px; z-index:9000;"
+    ) as _processing_element:
+        with ui.card().tight().classes("px-4 py-3").style(
+            "background:#16162a; border:1px solid rgba(99,102,241,0.3);"
+            "border-radius:10px; box-shadow:0 4px 24px rgba(0,0,0,0.5);"
+        ):
+            with ui.row().classes("items-center gap-3"):
+                ui.spinner(size="1rem", color="indigo")
+                _processing_label = ui.label("Processing…").classes("text-sm").style(
+                    "color:#c4c4d4; font-family:Inter,sans-serif; white-space:nowrap;"
+                )
+                ui.button(icon="close", on_click=hide_processing).props(
+                    "flat round dense"
+                ).style("color:#475569; width:22px; height:22px;")
+    _processing_element.set_visibility(False)
 
 
 def show_processing(message: str = "Processing…") -> None:
-    if _processing_dialog and _processing_label:
+    if _processing_element and _processing_label:
         _processing_label.text = message
-        _processing_dialog.open()
+        _processing_element.set_visibility(True)
+
+
+def update_processing(message: str) -> None:
+    if _processing_label:
+        _processing_label.text = message
 
 
 def hide_processing() -> None:
-    if _processing_dialog:
-        _processing_dialog.close()
+    if _processing_element:
+        _processing_element.set_visibility(False)
 
 
 # ── Tour ─────────────────────────────────────────────────────────────────────
