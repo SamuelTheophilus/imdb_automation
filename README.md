@@ -168,7 +168,8 @@ The pipeline uses **Claude Sonnet 4.6** (`claude-sonnet-4-6`) via the Anthropic 
 | qwen2.5vl 32b (local) | 55 | 51.9% |
 | Gemini 2.5 Flash | 31 | 47.8% |
 | GPT-5.5 | 34 | 73.2% |
-| **Claude Sonnet 4.6 (current)** | **44** | **79.9%** |
+| Claude Sonnet 4.6 v6 | 44 | 79.9% |
+| **Claude Sonnet 4.6 v7 (current)** | **44** | **81.6%** |
 
 See `docs/model_selection.md` for the full model selection writeup and `docs/extraction_improvements.md` for all accuracy improvements.
 

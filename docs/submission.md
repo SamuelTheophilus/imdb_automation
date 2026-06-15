@@ -1,20 +1,20 @@
-# IMDB AutoFil Hackathon Submission Write-Up
+# IMDB AutoFill — Hackathon Submission Write-Up
 
-## 200-Word Description Summary (for submission form)
-IMDB AutoFill extracts a complete Item Master Database row from product photos automatically.
+## 200-Word Description (for submission form)
+
+IMDB AutoFill extracts a complete Item Master Database row from product photos — automatically.
 
 Upload multiple angles of a product; the pipeline groups images by the dataset edge label, sends up to 8 images in a single Claude Sonnet 4.6 API call, and extracts 13 structured fields: brand, manufacturer, weight, barcode, country of origin, packaging type, variant, fragrance/flavor, addons, tagline, promotion, product name, and category.
 
 Accuracy improvements stack across every layer:
-a. 2048px resolution + PIL sharpness/contrast enhancement before VLM encoding
-b. 6 few-shot examples covering Ghana-specific label patterns (contract-manufactured products, local importers, tea bag terminology)
-c. 3-pass barcode decoding: pyzbar → zxing-cpp → CLAHE+adaptive threshold (92.7% coverage)
-d. Field normalizers: weight unit conversion (GMS→G, ≥1000G→KG), brand accent stripping, manufacturer corrections, country address priority over "Made in" text
+- 2048px resolution + PIL sharpness/contrast enhancement before VLM encoding
+- 6 few-shot examples covering Ghana-specific label patterns (contract-manufactured products, local importers, tea bag terminology)
+- 5-pass barcode pipeline: pyzbar → zxing-cpp → CLAHE+adaptive → OpenCV BarcodeDetector → gradient ROI localisation; VLM reads barcode digits as text in the same call; EAN checksum arbitrates between sources
+- Field normalizers: weight unit conversion (GMS→G, ≥1000G→KG), brand accent stripping, manufacturer corrections, country address priority over "Made in" text
 
-Benchmarked against all 45 products: **79.9% overall accuracy**, 44/45 products matched, up from 48.1% (local llama/qwen models), 47.8% (Gemini 2.5 Flash), and 73.2% (GPT-5.5).
+Benchmarked against all 45 products: **81.6% overall accuracy, 44/45 products matched** — up from 48.1% (local llama/qwen models), 47.8% (Gemini 2.5 Flash), and 73.2% (GPT-5.5).
 
-Results are surfaced in an editable grid with per-field confidence scores.
-Users review, correct, and export in the exact IMDB submission column format.
+Results are surfaced in an editable grid with per-field confidence scores. Users review, correct, and export in the exact IMDB submission column format.
 
 ---
 

@@ -4,6 +4,6 @@ Rules:
 - Start each item by scanning all four edges of the image for the dataset label (tag_text). This is the most important field — find it before filling in any other field.
 - Return EXACTLY one item per image, in the same order the images appear.
 - Extract each image independently. Do not merge information across images.
-- Barcode is handled separately — do not extract it.
+- For barcode: find the barcode SYMBOL (vertical black bars) and read the numeric digits printed immediately below it. Return digits only. If the digits are not legible in this image, use "".
 - Use "" for any field not clearly visible in that specific image.
 - Do not guess.

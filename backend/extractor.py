@@ -13,7 +13,7 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader
 from PIL import Image, ImageEnhance
 
-from backend.barcode import decode_barcode
+from backend.barcode import decode_barcode, ean_checksum_valid
 from backend.image_aggregation import group_by_tag_similarity
 from backend.schema import IMDBRecordWithConfidence
 from backend.utils import VLMCallParams, VLMImageData, vlm_call_w_anthropic, vlm_call_w_ollama, vlm_call_w_openai, vlm_call_w_gemini
@@ -318,6 +318,49 @@ def _unique_join(items: list[dict], key: str) -> str | None:
     return "; ".join(values) if values else None
 
 
+# ── Barcode resolution ────────────────────────────────────────────────────────
+
+def _resolve_barcode(
+    pipeline_bc: str | None,
+    pipeline_conf: float,
+    vlm_bc: str | None,
+) -> tuple[str | None, float]:
+    """Pick the best barcode from pipeline decoder and VLM digit read.
+
+    Priority rules (EAN checksum is the arbiter):
+      Both agree                → use either, full confidence
+      Pipeline ✓, VLM ✗        → pipeline wins
+      VLM ✓, Pipeline ✗        → VLM wins
+      Both ✓ but different      → prefer pipeline (bar-pattern read is primary)
+      Neither ✓, both exist     → prefer pipeline
+      Only pipeline exists      → pipeline wins
+      Only VLM ✓ checksum       → VLM wins (pipeline found nothing valid)
+      Only VLM ✗ checksum       → reject (likely hallucinated)
+    """
+    pip_valid = pipeline_bc is not None and ean_checksum_valid(pipeline_bc)
+    vlm_valid = vlm_bc is not None and ean_checksum_valid(vlm_bc)
+
+    if pipeline_bc and vlm_bc:
+        if pipeline_bc == vlm_bc:
+            return pipeline_bc, 1.0
+        if pip_valid and not vlm_valid:
+            return pipeline_bc, pipeline_conf
+        if vlm_valid and not pip_valid:
+            print(f"[barcode] VLM wins over invalid pipeline read: {vlm_bc} vs {pipeline_bc}")
+            return vlm_bc, 0.9
+        # Both valid but different — pipeline is primary
+        return pipeline_bc, pipeline_conf
+
+    if pipeline_bc:
+        return pipeline_bc, pipeline_conf
+
+    if vlm_bc and vlm_valid:
+        print(f"[barcode] VLM-only read (pipeline failed): {vlm_bc}")
+        return vlm_bc, 0.85
+
+    return None, 0.0
+
+
 # ── Record builder ───────────────────────────────────────────────────────────
 
 def _record_from_group(
@@ -334,9 +377,18 @@ def _record_from_group(
     - packaging_type, country: majority vote
     - optional fields (promo, variant, etc.): strict majority vote — a value
       seen on only one face is likely a hallucination and is dropped to None
-    - barcode: decoded by pyzbar, not by the VLM
+    - barcode: pipeline decoder + VLM digit read, resolved via EAN checksum
     """
-    barcode_value, barcode_confidence = decode_barcode(group_paths)
+    # Pipeline barcode (bar-pattern decoding)
+    pipeline_bc, pipeline_conf = decode_barcode(group_paths)
+
+    # VLM barcode (digits read as text from the label image)
+    vlm_bc_raw = _most_common_text(group_items, "barcode")
+    vlm_bc = "".join(c for c in (vlm_bc_raw or "") if c.isdigit()) or None
+
+    barcode_value, barcode_confidence = _resolve_barcode(
+        pipeline_bc, pipeline_conf, vlm_bc
+    )
 
     def conf(value) -> float:
         return 0.9 if value is not None else 0.0

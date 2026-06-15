@@ -225,6 +225,9 @@ def _fix_barcode(value: str | None) -> tuple[str | None, bool]:
     # GTIN-14 with leading 0 → EAN-13
     if len(digits) == 14 and digits.startswith("0"):
         digits = digits[1:]
+    # EAN-13 starting with 0 → UPC-A (12 digits) — GT uses 12-digit format for US/CA barcodes
+    if len(digits) == 13 and digits.startswith("0"):
+        digits = digits[1:]
     result = digits if digits else None
     return result, result != original
 
