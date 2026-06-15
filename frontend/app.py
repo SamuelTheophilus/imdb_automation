@@ -6,6 +6,7 @@ from nicegui import app, ui
 
 # Importing this module registers the /login and /signup pages with NiceGUI.
 import frontend.auth_pages  # noqa: F401
+from frontend.info_page import register_coming_soon
 from backend.db import init_db, list_extraction_versions, list_user_extractions
 from backend.normalizer import load_canonical_brands
 from frontend.auth_pages import require_user
@@ -182,6 +183,7 @@ def history_page():
 
 
 if __name__ in {"__main__", "__mp_main__"}:
+    register_coming_soon()
     init_db()
 
     brands_csv = Path("data/canonical_brands.csv")
