@@ -16,7 +16,7 @@ from PIL import Image, ImageEnhance
 from backend.barcode import decode_barcode
 from backend.image_aggregation import group_by_tag_similarity
 from backend.schema import IMDBRecordWithConfidence
-from backend.utils import VLMCallParams, VLMImageData, vlm_call_w_ollama, vlm_call_w_openai, vlm_call_w_gemini
+from backend.utils import VLMCallParams, VLMImageData, vlm_call_w_anthropic, vlm_call_w_ollama, vlm_call_w_openai, vlm_call_w_gemini
 
 # ── Prompt templates ────────────────────────────────────────────────────────
 jinja_templates_folder = f"{Path(__file__).parent.parent}/core/prompts"
@@ -36,7 +36,7 @@ _MAX_IMAGE_SIDE = 2048
 # Falls back to USE_LOCAL_MODEL for backward compatibility.
 def _resolve_backend() -> str:
     explicit = os.getenv("VLM_BACKEND", "").strip().lower()
-    if explicit in ("ollama", "openai", "gemini"):
+    if explicit in ("ollama", "openai", "gemini", "anthropic"):
         return explicit
     return "ollama" if os.getenv("USE_LOCAL_MODEL", "YES").strip().upper() == "YES" else "openai"
 
@@ -62,6 +62,8 @@ def _get_semaphore() -> asyncio.Semaphore:
 
 async def _vlm_call(params: VLMCallParams):
     """Route the VLM call to the configured backend."""
+    if _VLM_BACKEND == "anthropic":
+        return await vlm_call_w_anthropic(params)
     if _VLM_BACKEND == "gemini":
         return await vlm_call_w_gemini(params)
     if _VLM_BACKEND == "openai":
@@ -350,9 +352,9 @@ def _record_from_group(
     country_of_origin    = _most_common_text(group_items, "country_of_origin")
     promotional_messages = _most_common_text(group_items, "promotional_messages", strict=True)
     variant              = _most_common_text(group_items, "variant",              strict=True)
-    fragrance_flavor     = _most_common_text(group_items, "fragrance_flavor",     strict=True)
-    addons               = _most_common_text(group_items, "addons",               strict=True)
-    tagline              = _most_common_text(group_items, "tagline",              strict=True)
+    fragrance_flavor     = _most_common_text(group_items, "fragrance_flavor")
+    addons               = _most_common_text(group_items, "addons")
+    tagline              = _most_common_text(group_items, "tagline")
 
     record = IMDBRecordWithConfidence(
         barcode=_as_text(barcode_value),

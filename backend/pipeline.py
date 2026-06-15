@@ -142,9 +142,6 @@ async def run_pipeline(
 
     pipeline_results: list[PipelineResult] = []
     for record, group_paths in extracted_products:
-        print(f"[pipeline] Extraction result type: {type(record)}")
-        print(f"[pipeline] Extraction result: {record}")
-
         print("[pipeline] Normalizing fields...")
         record, normalized_fields = normalize_record(record)
 

@@ -1,10 +1,19 @@
 import re
+import unicodedata
 from pathlib import Path
 
 import pandas as pd
 from rapidfuzz import process, fuzz
 
 from backend.schema import IMDBRecordWithConfidence
+
+
+def _strip_accents(text: str) -> str:
+    """Decompose unicode accents and drop combining characters (PÓMO → POMO)."""
+    return "".join(
+        c for c in unicodedata.normalize("NFKD", text)
+        if not unicodedata.combining(c)
+    )
 
 
 # ── Canonical lists ─────────────────────────────────────────────────────────
@@ -23,17 +32,24 @@ CANONICAL_BRANDS: list[str] = [
 ]
 
 CANONICAL_MANUFACTURERS: list[str] = [
-    "AFRICAN CONSUMER PRODUCTS", "AJC TRADING CO LTD", "AL AIN COMPANY LTD",
-    "AQUAFRESH LIMITED", "ATONA FOODS", "B-DIET LTD", "BLOW CHEM INDUSTRIES LTD",
-    "C'PROPRE", "ETKAF", "FAGIP VENTURES", "GB FOODS", "GEE TRADING SAL",
-    "HAMTA & SONS LTD", "HOMEPRO COMPANY LTD", "KING SAM", "LGD LIMITED",
-    "MADHU JAYANTI INTERNATIONAL PVT LTD", "MENKISH IMPEX",
+    "AFRICAN CONSUMER PRODUCTS", "AJC TRADING CO LTD", "AL-AIN NATIONAL JUICE & REFRESHMENTS CO.",
+    "AL AIN COMPANY LTD", "AQUAFRESH LIMITED", "ATONA FOODS", "B-DIET LTD",
+    "BLOW CHEM INDUSTRIES LTD", "C'PROPRE", "ETKAF", "FAGIP VENTURES", "GB FOODS",
+    "GEE TRADING SAL", "HAMTA & SONS LIMITED", "HAMTA & SONS LTD", "HOMEPRO COMPANY LTD",
+    "KING SAM", "LGD LIMITED", "MADHU JAYANTI INTERNATIONAL PVT LTD", "MENKISH IMPEX",
     "NAM VIET PHAT FOOD CO. LIMITED", "NESTLE", "NUTRIFOODS", "PROCUS LIMITED",
     "PROMASIDOR", "PT SAYAP MAS UTAMA", "S.D.T.M", "SENICO",
     "SISTER SARDINE & MACKEREL VENTURES", "SYNERGY ENTREPRISES ( FZE)",
     "THE COCA COLA COMPANY", "U-FRESH ENTERPRISES", "UNILEVER", "UPFIELD",
     "WATAWALA TEA CEYLON LTD", "ZHEJIANG NATIVE PRODUCE & ANIMAL CO LTD",
 ]
+
+# Manufacturer-specific corrections that fuzzy matching can't reliably catch
+_MANUFACTURER_CORRECTIONS: dict[str, str] = {
+    "SDTM-CI": "S.D.T.M",
+    "S.D.T.M-CI": "S.D.T.M",
+    "SDTM CI": "S.D.T.M",
+}
 
 CANONICAL_CATEGORIES: list[str] = [
     "MAYONNAISE", "SALTED MARGARINE", "BUTTER", "POWDER",
@@ -136,6 +152,48 @@ def _fix_country(value: str | None) -> tuple[str | None, bool]:
     return upper, upper != value
 
 
+_WEIGHT_MULTI    = re.compile(r"\s*[-/]\s*.+$")
+_WEIGHT_SPACE    = re.compile(r"(\d)\s+(ML|G|KG|L|GMS?)\b", re.IGNORECASE)
+_WEIGHT_GMS      = re.compile(r"^(\d+(?:\.\d+)?)GMS?$", re.IGNORECASE)
+_WEIGHT_ML_CONV  = re.compile(r"^(\d+(?:\.\d+)?)ML$", re.IGNORECASE)
+_WEIGHT_G_CONV   = re.compile(r"^(\d+(?:\.\d+)?)G$", re.IGNORECASE)
+
+
+def _fix_weight(value: str | None) -> tuple[str | None, bool]:
+    """Normalise weight strings to match GT format.
+
+    Rules (applied in order):
+    1. Take the first value when multiple are combined e.g. "1000ML - 940G" → "1000ML"
+    2. Strip spaces between number and unit e.g. "350 ML" → "350ML"
+    3. Convert GMS → G e.g. "2200GMS" → "2200G"
+    4. 1000ML → 1L
+    5. ≥1000G → KG e.g. "2200G" → "2.2KG"
+    """
+    if not value:
+        return value, False
+    original = str(value).upper().strip()
+    w = original
+
+    w = _WEIGHT_MULTI.sub("", w).strip()
+    w = _WEIGHT_SPACE.sub(lambda m: m.group(1) + m.group(2).upper(), w).upper()
+    w = _WEIGHT_GMS.sub(lambda m: f"{m.group(1)}G", w).upper()
+
+    m = _WEIGHT_ML_CONV.match(w)
+    if m:
+        ml = float(m.group(1))
+        if ml == 1000:
+            w = "1L"
+
+    m = _WEIGHT_G_CONV.match(w)
+    if m:
+        g = float(m.group(1))
+        if g >= 1000:
+            kg = g / 1000
+            w = f"{int(kg)}KG" if kg == int(kg) else f"{kg}KG"
+
+    return w, w != original
+
+
 _ADDON_TEA_BAGS = re.compile(r"(\d+)\s*FREE\s+TEA\s+BAGS?", re.IGNORECASE)
 
 def _fix_addons(value: str | None) -> tuple[str | None, bool]:
@@ -188,11 +246,20 @@ def normalize_record(
     """
     normalized_fields: list[str] = []
 
-    brand, changed = _fuzzy_normalize(record.brand, CANONICAL_BRANDS, threshold=85)
+    # Strip accents before fuzzy match so PÓMO → POMO, etc.
+    deaccented_brand = _strip_accents(record.brand) if record.brand else record.brand
+    brand, changed = _fuzzy_normalize(deaccented_brand, CANONICAL_BRANDS, threshold=85)
+    if not changed and deaccented_brand != record.brand:
+        brand, changed = deaccented_brand, True  # accent stripping alone fixed it
     if changed:
         record.brand = brand
         normalized_fields.append("brand")
 
+    mfr = record.manufacturer
+    if mfr and mfr.upper().strip() in _MANUFACTURER_CORRECTIONS:
+        mfr = _MANUFACTURER_CORRECTIONS[mfr.upper().strip()]
+        record.manufacturer = mfr
+        normalized_fields.append("manufacturer")
     manufacturer, changed = _fuzzy_normalize(record.manufacturer, CANONICAL_MANUFACTURERS, threshold=82)
     if changed:
         record.manufacturer = manufacturer
@@ -204,6 +271,11 @@ def normalize_record(
     if changed and packaging:
         record.packaging_type = packaging
         normalized_fields.append("packaging_type")
+
+    weight, changed = _fix_weight(record.weight)
+    if changed:
+        record.weight = weight
+        normalized_fields.append("weight")
 
     country, changed = _fix_country(record.country_of_origin)
     if changed:
