@@ -7,13 +7,11 @@ from frontend.auth_pages import current_user, logout, render_change_password_dia
 from frontend.tour import TOUR_JS, TOUR_SAMPLE_ROW
 from frontend.handlers import (
     QUICK_UPLOAD_LIMIT,
-    SAMPLES,
     do_delete_row,
     do_export_csv,
     do_export_excel,
     handle_batch_upload,
     handle_bulk_start,
-    handle_sample,
     persist_row_edits,
     stage_bulk_files,
 )
@@ -646,50 +644,6 @@ def _render_quick_tab() -> None:
             "upload-zone-cover"
         )
 
-    # ── Sample picker ──────────────────────────────────────────────────────
-    with ui.row().classes("w-full justify-center items-center gap-2 mt-2"):
-        ui.label("or").style("color:#334155; font-size:12px;")
-        toggle_label = ui.label("try a sample →").style(
-            "color:#6366f1; font-size:12px; cursor:pointer;"
-            "font-family:Inter,sans-serif; font-weight:500;"
-        )
-
-    cards_container = ui.row().classes("w-full gap-3 mt-1")
-    cards_container.set_visibility(False)
-
-    with cards_container:
-        for key, meta in SAMPLES.items():
-            with ui.card().tight().classes("flex-1 cursor-pointer").style(
-                "background:#0f1117; border:1px solid #1e1e2e;"
-                "border-radius:10px; overflow:hidden;"
-            ).on("click", lambda e, k=key: handle_sample(k)):
-                ui.image(meta["thumbnail"]).style(
-                    "width:100%; height:110px; object-fit:cover;"
-                )
-                with ui.column().classes("px-3 py-2 gap-1"):
-                    with ui.row().classes("items-center justify-between w-full"):
-                        ui.label(meta["label"]).style(
-                            "color:#e2e2f0; font-size:12px; font-weight:600;"
-                            "font-family:Inter,sans-serif;"
-                        )
-                        ui.badge("Sample").props("outline color=indigo").style(
-                            "font-size:9px;"
-                        )
-                    ui.label(meta["category"]).style(
-                        "color:#6b7280; font-size:11px; font-family:Inter,sans-serif;"
-                    )
-                    ui.label(meta["note"]).style(
-                        "color:#374151; font-size:10px; font-family:Inter,sans-serif;"
-                    )
-
-    _sample_open = [False]
-
-    def _toggle_samples():
-        _sample_open[0] = not _sample_open[0]
-        cards_container.set_visibility(_sample_open[0])
-        toggle_label.text = "hide samples ↑" if _sample_open[0] else "try a sample →"
-
-    toggle_label.on("click", _toggle_samples)
 
 
 def _render_bulk_tab(user: dict | None) -> None:

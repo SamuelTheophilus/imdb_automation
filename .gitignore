@@ -8,6 +8,7 @@ data/*.sqlite3-*
 data/uploads/
 data/*.csv
 data/*.xlsx
+data/samples
 imdb_images/
 .DS_Store
 eval/eval_from_org.xlsx

@@ -34,12 +34,10 @@ _DRIVER_CDN = (
     "</script>"
 )
 UPLOAD_DIR = Path("data/uploads")
-SAMPLES_DIR = Path("data/samples")
 
-# Expose uploaded and sample images as static files.
+# Expose uploaded images as static files.
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 app.add_static_files("/uploads", UPLOAD_DIR)
-app.add_static_files("/samples", SAMPLES_DIR)
 
 # ── Background batch poller ───────────────────────────────────────────────────
 
