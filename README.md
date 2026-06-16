@@ -86,8 +86,8 @@ sudo apt-get install libzbar0
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/SamuelTheophilus/imdb-autofill.git
-cd imdb-autofill
+git clone https://github.com/SamuelTheophilus/imdb_automation.git
+cd imdb_automation
 uv sync
 ```
 
@@ -115,7 +115,7 @@ STORAGE_SECRET=any-random-string
 uv run python -m frontend.app
 ```
 
-Open [http://localhost:5200](http://localhost:5200).
+Open [http://localhost:5300](http://localhost:5300).
 
 ---
 
@@ -145,14 +145,18 @@ Set these under **Settings → Variables and secrets** on your HF Space:
 ## Usage
 
 1. Sign up or log in.
-2. Upload one or more product images — multiple angles of the same product work best. The pipeline groups them automatically by the dataset label on the edge of the packaging.
-3. Wait for extraction — the grid updates when done.
-4. Review row confidence:
+2. Upload product images using one of two modes:
+
+   **Quick Upload** (up to 20 images) — images are processed immediately. Multiple angles of the same product are grouped automatically by the dataset label on the edge of the packaging. The grid updates when extraction is complete.
+
+   **Bulk Batch** (unlimited images) — drop a large folder of images, enter a notification email, and click **Start**. The job is submitted to the Anthropic Batch API and processed asynchronously — you will receive an email when it is done. Results appear in the grid on your next login.
+
+3. Review row confidence:
    - **Green** — high confidence, likely correct
    - **Yellow** — one or more fields need review
    - **Red** — possible duplicate
-5. Click **Review** to open the side drawer: view the image carousel and edit any field.
-6. Export CSV or Excel from the header.
+4. Click **Review** to open the side drawer: view the image carousel and edit any field.
+5. Export CSV or Excel from the header.
 
 ---
 
@@ -196,19 +200,24 @@ Open [http://localhost:7860](http://localhost:7860).
 
 ```
 backend/
-  pipeline.py         end-to-end orchestration
-  extractor.py        VLM calls, batching, field aggregation, backend routing
-  barcode.py          3-pass barcode extraction (pyzbar, zxing-cpp, CLAHE+adaptive)
-  normalizer.py       country corrections, weight conversion, barcode cleaning, fuzzy matching
-  db.py               SQLite persistence and edit version history
-  schema.py           Pydantic models with per-field confidence scores
-  utils.py            VLM call functions (Anthropic, OpenAI, Gemini, Ollama backends)
+  pipeline.py           end-to-end orchestration
+  extractor.py          VLM calls, batching, field aggregation, backend routing
+  batch_processor.py    async bulk processing via Anthropic Batch API
+  barcode.py            5-pass barcode extraction (pyzbar, zxing-cpp, CLAHE, rotation, ROI)
+  normalizer.py         country corrections, weight conversion, barcode cleaning, fuzzy matching
+  email_service.py      password reset and batch completion email notifications
+  db.py                 SQLite persistence, edit version history, batch job tracking
+  schema.py             Pydantic models with per-field confidence scores
+  utils.py              VLM call functions (Anthropic, OpenAI, Gemini, Ollama backends)
 core/prompts/
   vlm_system_prompt.j2        field definitions, output contract, and few-shot examples
   vlm_extraction_prompt.j2    per-image extraction instructions
+core/emails/
+  password_reset.j2     password reset email template
+  batch_complete.j2     batch job completion email template
 frontend/
   app.py              NiceGUI entry point and page registration
-  components.py       grid, review drawer, carousel, upload zone
+  components.py       grid, review drawer, carousel, upload zone, bulk batch tab
   auth_pages.py       login, signup, password reset pages
   handlers.py         upload, export, edit, and delete handlers
   state.py            shared state, row mapping, export formatting
