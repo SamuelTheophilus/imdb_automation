@@ -7,7 +7,7 @@ from nicegui import app, ui
 
 # Importing this module registers the /login and /signup pages with NiceGUI.
 import frontend.auth_pages  # noqa: F401
-from backend.db import init_db, list_batch_jobs, list_extraction_versions, list_user_extractions
+from backend.db import delete_batch_job, init_db, list_batch_jobs, list_extraction_versions, list_user_extractions
 from frontend.state import db_record_to_row, set_batch_jobs_refresh
 from backend.normalizer import load_canonical_brands
 from frontend.auth_pages import require_user
@@ -103,11 +103,28 @@ def _render_batch_jobs_section(user_id: int) -> None:
         if not fresh:
             return
 
-        with ui.column().classes("w-full gap-2"):
+        # ── Header row: label + collapse toggle ───────────────────────────────
+        collapsed = {"v": False}
+
+        with ui.row().classes("w-full items-center justify-between"):
             ui.label("Batch Jobs").style(
                 "color:#475569; font-size:11px; font-weight:600; letter-spacing:0.5px;"
                 "text-transform:uppercase; font-family:Inter,sans-serif"
             )
+            toggle_btn = ui.button(icon="expand_less").props(
+                "flat round dense"
+            ).style("color:#334155; opacity:0.6")
+
+        jobs_list = ui.column().classes("w-full gap-2")
+
+        def _toggle():
+            collapsed["v"] = not collapsed["v"]
+            jobs_list.set_visibility(not collapsed["v"])
+            toggle_btn.props(f"icon={'expand_more' if collapsed['v'] else 'expand_less'}")
+
+        toggle_btn.on("click", _toggle)
+
+        with jobs_list:
             for job in fresh:
                 icon_name, color, label = _STATUS_STYLE.get(
                     job["status"], ("help_outline", "#64748b", job["status"])
@@ -132,6 +149,16 @@ def _render_batch_jobs_section(user_id: int) -> None:
                                 ui.label(f"· {n} product{'s' if n != 1 else ''} extracted").style(
                                     "color:#64748b; font-size:12px; font-family:Inter,sans-serif"
                                 )
+                                skipped = job.get("skipped_count") or 0
+                                if skipped:
+                                    names = __import__("json").loads(job.get("skipped_names_json") or "[]")
+                                    names_str = ", ".join(names[:5])
+                                    if len(names) > 5:
+                                        names_str += f" +{len(names) - 5} more"
+                                    tip = f"{skipped} skipped — {names_str}" if names_str else f"{skipped} skipped"
+                                    ui.label(f"· {skipped} skipped").style(
+                                        "color:#ef4444; font-size:12px; font-family:Inter,sans-serif; opacity:0.7"
+                                    ).tooltip(tip)
                         detail_parts = [f"Submitted {submitted}"]
                         if email:
                             detail_parts.append(f"notify {email}")
@@ -140,6 +167,14 @@ def _render_batch_jobs_section(user_id: int) -> None:
                         )
                     if job["status"] == "pending":
                         ui.spinner(size="sm").style("color:#f59e0b; flex-shrink:0")
+                    # Clear button — only for completed/failed jobs
+                    if job["status"] in ("completed", "failed"):
+                        def _clear(jid=job["id"]):
+                            delete_batch_job(jid)
+                            _jobs_cards.refresh()
+                        ui.button(icon="close", on_click=_clear).props(
+                            "flat round dense"
+                        ).style("color:#334155; opacity:0.5; flex-shrink:0").tooltip("Clear")
 
     _jobs_cards()
     set_batch_jobs_refresh(_jobs_cards.refresh)

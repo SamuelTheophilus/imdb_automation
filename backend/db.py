@@ -52,6 +52,15 @@ def _migrate_users(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
 
 
+def _migrate_batch_jobs(conn: sqlite3.Connection) -> None:
+    """Add skipped_count and skipped_names_json columns to batch_jobs if missing."""
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(batch_jobs)")}
+    if "skipped_count" not in existing:
+        conn.execute("ALTER TABLE batch_jobs ADD COLUMN skipped_count INTEGER")
+    if "skipped_names_json" not in existing:
+        conn.execute("ALTER TABLE batch_jobs ADD COLUMN skipped_names_json TEXT")
+
+
 def _utc_now() -> str:
     """Store timestamps as sortable ISO-8601 UTC strings."""
     return datetime.now(timezone.utc).isoformat()
@@ -138,6 +147,7 @@ def init_db() -> None:
                 submitted_at TEXT NOT NULL,
                 completed_at TEXT,
                 result_count INTEGER,
+                skipped_count INTEGER,
                 error_message TEXT,
                 FOREIGN KEY(user_id) REFERENCES users(id)
             );
@@ -145,6 +155,7 @@ def init_db() -> None:
         )
         _migrate_users(conn)
         _migrate_extractions(conn)
+        _migrate_batch_jobs(conn)
         _seed_missing_versions(conn)
 
 
@@ -537,10 +548,14 @@ def update_batch_job_status(
     status: str,
     *,
     result_count: int | None = None,
+    skipped_count: int | None = None,
+    skipped_names: list[str] | None = None,
     error_message: str | None = None,
 ) -> None:
-    """Update the status of a batch job, optionally recording result count or error."""
+    """Update the status of a batch job, optionally recording result/skipped counts or error."""
+    import json as _json
     now = _utc_now()
+    skipped_names_json = _json.dumps(skipped_names) if skipped_names is not None else None
     with get_connection() as conn:
         conn.execute(
             """
@@ -548,8 +563,16 @@ def update_batch_job_status(
             SET status = ?,
                 completed_at = CASE WHEN ? IN ('completed', 'failed') THEN ? ELSE completed_at END,
                 result_count = COALESCE(?, result_count),
+                skipped_count = COALESCE(?, skipped_count),
+                skipped_names_json = COALESCE(?, skipped_names_json),
                 error_message = COALESCE(?, error_message)
             WHERE id = ?
             """,
-            (status, status, now, result_count, error_message, job_id),
+            (status, status, now, result_count, skipped_count, skipped_names_json, error_message, job_id),
         )
+
+
+def delete_batch_job(job_id: int) -> None:
+    """Remove a batch job record."""
+    with get_connection() as conn:
+        conn.execute("DELETE FROM batch_jobs WHERE id = ?", (job_id,))

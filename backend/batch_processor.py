@@ -261,16 +261,23 @@ async def _process_completed_job(client: AsyncAnthropic, job: dict) -> None:
     log.info("[batch:process] grouped into %d product group(s)", len(grouped))
 
     results: list[PipelineResult] = []
+    skipped_groups = 0
+    skipped_names: list[str] = []
     for g_idx, group in enumerate(grouped):
         group_paths = [item["image_path"] for item in group]
         try:
             record = _record_from_group(group, group_paths)
             record, norm_fields = normalize_record(record)
             if not record.brand and not record.product_name and not record.manufacturer:
-                log.info("[batch:process]   group %d — empty record, skipping", g_idx)
+                log.info("[batch:process]   group %d — no product detected, skipping %d image(s)",
+                         g_idx, len(group_paths))
+                skipped_groups += len(group_paths)
+                skipped_names.extend(Path(p).name for p in group_paths)
                 continue
         except Exception as exc:
             log.warning("[batch:process]   group %d — record build failed: %s", g_idx, exc)
+            skipped_groups += len(group_paths)
+            skipped_names.extend(Path(p).name for p in group_paths)
             continue
 
         log.info("[batch:process]   group %d — brand=%-16s  product=%s",
@@ -288,8 +295,17 @@ async def _process_completed_job(client: AsyncAnthropic, job: dict) -> None:
             )
         )
 
+    # Also count parse-skipped images
+    skipped_total = skipped_groups + parse_skip
+    # Names for parse-skipped images (from sub-batch paths)
+    for custom_id, path_strs in request_map.items():
+        raw = raw_results.get(custom_id, "").strip()
+        if not raw:
+            skipped_names.extend(Path(p).name for p in path_strs)
+
     # ── Persist to DB ──────────────────────────────────────────────────────────
-    log.info("[batch:process] saving %d product(s) to database…", len(results))
+    log.info("[batch:process] saving %d product(s) to database… (%d image(s) skipped)",
+             len(results), skipped_total)
     user_id = job["user_id"]
     for result in results:
         create_extraction(
@@ -299,9 +315,14 @@ async def _process_completed_job(client: AsyncAnthropic, job: dict) -> None:
         )
 
     result_count = len(results)
-    update_batch_job_status(job_id, "completed", result_count=result_count)
-    log.info("[batch:process] ✓ job_id=%d complete — %d product(s) saved to user_id=%d",
-             job_id, result_count, user_id)
+    update_batch_job_status(
+        job_id, "completed",
+        result_count=result_count,
+        skipped_count=skipped_total,
+        skipped_names=skipped_names if skipped_names else None,
+    )
+    log.info("[batch:process] ✓ job_id=%d complete — %d extracted, %d skipped",
+             job_id, result_count, skipped_total)
 
     # ── Email notification ─────────────────────────────────────────────────────
     notify_email = job.get("notify_email") or ""

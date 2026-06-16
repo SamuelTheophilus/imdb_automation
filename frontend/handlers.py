@@ -64,13 +64,6 @@ async def handle_batch_upload(e: events.MultiUploadEventArguments):
         if getattr(client, "_deleted", False):
             return
         hide_processing()
-        # Add a failed row for every uploaded image so nothing disappears silently
-        for path in saved_paths:
-            row_data.append(failed_row(str(path), str(exc), len(row_data)))
-        grid = get_grid()
-        if grid:
-            grid.options["rowData"] = list(row_data)
-            grid.update()
         ui.notify(f"Processing failed: {exc}", type="negative", position="center")
         return
 
@@ -92,11 +85,6 @@ async def handle_batch_upload(e: events.MultiUploadEventArguments):
         row["db_id"] = extraction_id
         row_data.append(row)
 
-    # Add failed rows for any images the pipeline silently dropped
-    for path in saved_paths:
-        if str(path) not in covered:
-            row_data.append(failed_row(str(path), "Could not extract data", len(row_data)))
-
     if getattr(client, "_deleted", False):
         return
 
@@ -106,6 +94,13 @@ async def handle_batch_upload(e: events.MultiUploadEventArguments):
         grid.update()
 
     hide_processing()
+
+    # Images with no product detected — ask the user one at a time
+    skipped_paths = [p for p in saved_paths if str(p) not in covered]
+    for idx, path in enumerate(skipped_paths):
+        await _show_no_product_dialog(path, idx + 1, len(skipped_paths))
+    if skipped_paths:
+        return
 
     if any(result.has_duplicates for result in results):
         ui.notify(
@@ -175,6 +170,66 @@ def do_delete_row(row: dict) -> None:
         p = Path(raw_path)
         if p.exists():
             p.unlink()
+
+
+async def _show_no_product_dialog(path: Path, current: int, total: int) -> None:
+    """Show a per-image dialog when no product was detected.
+    Keep → add as a grid entry. Discard or Close → do nothing.
+    """
+    from frontend.state import image_to_url
+
+    counter = f"Image {current} of {total} — " if total > 1 else ""
+
+    with ui.dialog() as dlg, ui.card().style(
+        "min-width:380px; max-width:440px; background:#1e1c19;"
+        "border:1px solid rgba(240,225,205,0.09); border-radius:16px; padding:0; overflow:hidden;"
+    ):
+        # ── Header ────────────────────────────────────────────────────────────
+        with ui.row().classes("w-full items-center justify-between px-5 py-4").style(
+            "border-bottom:1px solid rgba(240,225,205,0.07)"
+        ):
+            ui.html(
+                f'<p style="font-size:14px;font-weight:700;color:#f0ebe5;'
+                f'font-family:Inter,sans-serif;letter-spacing:-0.3px;margin:0">'
+                f'{counter}No product detected</p>'
+            )
+            ui.button(icon="close", on_click=lambda: dlg.submit("close")).props(
+                "flat round dense"
+            ).style("color:#475569")
+
+        # ── Image + message ───────────────────────────────────────────────────
+        with ui.column().classes("w-full px-5 py-4 gap-3"):
+            ui.html(
+                '<p style="font-size:13px;color:#52504c;font-family:Inter,sans-serif;'
+                'line-height:1.6;margin:0">'
+                f'The AI could not detect any product in <strong style="color:#a09890">'
+                f'{path.name}</strong>. Keep it in the list or discard it?</p>'
+            )
+            url = image_to_url(str(path))
+            if url:
+                ui.image(url).style(
+                    "width:100%; height:180px; object-fit:cover; border-radius:10px;"
+                    "border:1px solid rgba(240,225,205,0.07);"
+                )
+
+        # ── Actions ───────────────────────────────────────────────────────────
+        with ui.row().classes("w-full justify-between px-5 py-4").style(
+            "border-top:1px solid rgba(240,225,205,0.07)"
+        ):
+            ui.button("Discard", on_click=lambda: dlg.submit("discard")).props(
+                "flat"
+            ).style("color:#ef4444;font-weight:600;font-family:Inter,sans-serif")
+            ui.button("Keep", on_click=lambda: dlg.submit("keep")).props(
+                "unelevated color=indigo-5"
+            ).style("font-weight:600;font-family:Inter,sans-serif")
+
+    result = await dlg
+    if result == "keep":
+        row_data.append(failed_row(str(path), "No product detected", len(row_data)))
+        grid = get_grid()
+        if grid:
+            grid.options["rowData"] = list(row_data)
+            grid.update()
 
 
 # ── Bulk Batch upload ─────────────────────────────────────────────────────────

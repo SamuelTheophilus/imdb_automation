@@ -904,8 +904,54 @@ def render_grid():
                 break
 
     def on_cell_click(e):
-        if e.args.get("colId") == "_review":
-            open_review_drawer(e.args["data"])
+        col = e.args.get("colId")
+        row = e.args.get("data", {})
+        if col != "_review":
+            return
+
+        if row.get("_status") == "failed":
+            async def _show_failed_dialog():
+                with ui.dialog() as dlg, ui.card().classes("p-6 gap-0").style("min-width:340px"):
+                    ui.html(
+                        '<p style="font-size:15px;font-weight:700;color:#f0ebe5;'
+                        'font-family:Inter,sans-serif;letter-spacing:-0.3px;margin-bottom:8px">'
+                        'No product detected</p>'
+                    )
+                    ui.html(
+                        '<p style="font-size:13px;color:#52504c;font-family:Inter,sans-serif;'
+                        'line-height:1.6;margin-bottom:20px">'
+                        'The AI could not extract any product information from this image. '
+                        'You can keep it in the list for reference or discard it.'
+                        '</p>'
+                    )
+                    if row.get("thumbnail"):
+                        ui.image(row["thumbnail"]).style(
+                            "width:100%;height:140px;object-fit:cover;"
+                            "border-radius:10px;margin-bottom:20px;"
+                        )
+                    with ui.row().classes("w-full gap-2 justify-end"):
+                        ui.button("Keep", on_click=lambda: dlg.submit("keep")).props(
+                            "flat"
+                        ).style("color:#10b981;font-weight:600")
+                        ui.button("Discard", on_click=lambda: dlg.submit("discard")).props(
+                            "unelevated color=red-8"
+                        ).style("font-weight:600")
+
+                result = await dlg
+                if result == "discard":
+                    for i, r in enumerate(row_data):
+                        if r["id"] == row["id"]:
+                            row_data.pop(i)
+                            break
+                    g = get_grid()
+                    if g:
+                        g.options["rowData"] = list(row_data)
+                        g.update()
+                    ui.notify("Image discarded", type="info", position="center")
+
+            ui.timer(0, _show_failed_dialog, once=True)
+        else:
+            open_review_drawer(row)
 
     grid.on("cellValueChanged", on_cell_change)
     grid.on("cellClicked", on_cell_click)

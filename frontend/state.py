@@ -198,7 +198,21 @@ def cell_renderer(renderer_type: str) -> str:
     match renderer_type:
         case "review":
             return """
-                function() {
+                function(p) {
+                    if (p.data && p.data._status === 'failed') {
+                        return `
+                            <div style="display:flex;align-items:center;height:100%">
+                                <span style="
+                                    color:#64748b;font-size:11px;font-weight:500;
+                                    font-family:Inter,sans-serif;cursor:pointer;
+                                    padding:3px 8px;border:1px solid rgba(100,116,139,0.3);
+                                    border-radius:6px;opacity:0.85;transition:opacity 0.15s"
+                                    onmouseover="this.style.opacity='1'"
+                                    onmouseout="this.style.opacity='0.85'"
+                                >Keep / Discard</span>
+                            </div>
+                        `;
+                    }
                     return `
                         <div style="display:flex;align-items:center;height:100%">
                             <span
@@ -254,9 +268,20 @@ def cell_renderer(renderer_type: str) -> str:
                         ok:        { c:'#10b981', t:'OK' },
                         warn:      { c:'#f59e0b', t:'Needs review' },
                         duplicate: { c:'#ef4444', t:'Duplicate' },
-                        failed:    { c:'#ef4444', t:'Extraction failed' },
+                        failed:    { c:'#ef4444', t:'No product detected' },
                     };
                     const { c, t } = cfg[p.value] || { c:'#64748b', t: p.value };
+                    if (p.value === 'failed') {
+                        return `
+                            <div style="display:flex;flex-direction:column;justify-content:center;height:100%;gap:2px">
+                                <div style="display:flex;align-items:center;gap:6px">
+                                    <span style="width:6px;height:6px;border-radius:50%;background:${c};display:inline-block;flex-shrink:0"></span>
+                                    <span style="font-size:12px;color:#ef4444;font-family:Inter,sans-serif;font-weight:500">Extraction failed</span>
+                                </div>
+                                <span style="font-size:10px;color:#475569;font-family:Inter,sans-serif;padding-left:12px">No product detected</span>
+                            </div>
+                        `;
+                    }
                     return `
                         <div style="display:flex;align-items:center;height:100%;gap:8px">
                             <span style="
