@@ -10,7 +10,7 @@ from nicegui import events, ui
 from backend.db import create_extraction, delete_extraction, update_extraction_fields
 from backend.pipeline import PipelineResult, run_pipeline
 from frontend.auth_pages import current_user
-from frontend.state import FIELDS, get_grid, result_to_row, row_data, row_to_export_dict
+from frontend.state import FIELDS, failed_row, get_grid, result_to_row, row_data, row_to_export_dict
 
 QUICK_UPLOAD_LIMIT = 20
 BULK_IMAGE_EXTS = frozenset({".jpg", ".jpeg", ".png", ".webp"})
@@ -64,10 +64,24 @@ async def handle_batch_upload(e: events.MultiUploadEventArguments):
         if getattr(client, "_deleted", False):
             return
         hide_processing()
+        # Add a failed row for every uploaded image so nothing disappears silently
+        for path in saved_paths:
+            row_data.append(failed_row(str(path), str(exc), len(row_data)))
+        grid = get_grid()
+        if grid:
+            grid.options["rowData"] = list(row_data)
+            grid.update()
         ui.notify(f"Processing failed: {exc}", type="negative", position="center")
         return
 
     original_filename = ", ".join(filenames)
+
+    # Track which image paths were covered by a successful result
+    covered: set[str] = set()
+    for result in results:
+        for p in result.image_paths:
+            covered.add(str(p))
+
     for result in results:
         extraction_id = create_extraction(
             user_id=user["id"],
@@ -77,6 +91,11 @@ async def handle_batch_upload(e: events.MultiUploadEventArguments):
         row = result_to_row(result, len(row_data))
         row["db_id"] = extraction_id
         row_data.append(row)
+
+    # Add failed rows for any images the pipeline silently dropped
+    for path in saved_paths:
+        if str(path) not in covered:
+            row_data.append(failed_row(str(path), "Could not extract data", len(row_data)))
 
     if getattr(client, "_deleted", False):
         return
@@ -101,10 +120,7 @@ async def handle_batch_upload(e: events.MultiUploadEventArguments):
 
 
 def _export_filename(ext: str) -> str:
-    user = current_user()
-    username = (user["username"] if user else "user").lower().replace(" ", "_")
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return f"imdb_autofill_export_{username}_{timestamp}.{ext}"
+    return f"predictions.{ext}"
 
 
 def do_export_csv():

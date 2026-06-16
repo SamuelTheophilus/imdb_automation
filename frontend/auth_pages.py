@@ -177,6 +177,12 @@ def _render_form_panel(default_mode: str) -> None:
                     .classes("w-full")
                     .props("dark outlined dense")
                 )
+                ui.html(
+                    '<p style="font-size:11px; color:#3d3a37; font-family:Inter,sans-serif;'
+                    'margin-top:5px; line-height:1.5">'
+                    'Min 8 characters · one uppercase letter · one number · one special character (* / $ # @ ! &)'
+                    '</p>'
+                )
 
                 def do_signup() -> None:
                     signup_error.text = ""

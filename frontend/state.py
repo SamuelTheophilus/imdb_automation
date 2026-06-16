@@ -26,6 +26,20 @@ def get_grid():
 
 row_data: list[dict] = []
 
+# Callback registered by app.py so components.py can trigger a batch jobs refresh
+# without a circular import.
+_batch_jobs_refresh_fn = None
+
+
+def set_batch_jobs_refresh(fn) -> None:
+    global _batch_jobs_refresh_fn
+    _batch_jobs_refresh_fn = fn
+
+
+def refresh_batch_jobs() -> None:
+    if _batch_jobs_refresh_fn:
+        _batch_jobs_refresh_fn()
+
 
 # ── Field definitions ────────────────────────────────────────────────────────
 # FIELDS drives both the AG Grid column list and the review drawer inputs.
@@ -85,6 +99,24 @@ def image_to_url(path: str) -> str:
 
 
 # ── Row mappers ──────────────────────────────────────────────────────────────
+
+def failed_row(image_path: str, reason: str, idx: int) -> dict:
+    """Build a grid row for an image that failed extraction."""
+    row: dict = {
+        "id":          idx,
+        "thumbnail":   image_to_url(image_path),
+        "image_path":  image_path,
+        "image_paths": [image_path],
+        "_status":     "failed",
+        "_normalized": "",
+        "_low":        "",
+        "product_name": f"[Failed] {reason}",
+    }
+    for key, _ in FIELDS:
+        if key not in row:
+            row[key] = ""
+    return row
+
 
 def result_to_row(result: PipelineResult, idx: int) -> dict:
     """Map a PipelineResult to an AG Grid row dict."""
@@ -220,6 +252,7 @@ def cell_renderer(renderer_type: str) -> str:
                         ok:        { c:'#10b981', t:'OK' },
                         warn:      { c:'#f59e0b', t:'Needs review' },
                         duplicate: { c:'#ef4444', t:'Duplicate' },
+                        failed:    { c:'#ef4444', t:'Extraction failed' },
                     };
                     const { c, t } = cfg[p.value] || { c:'#64748b', t: p.value };
                     return `
@@ -273,11 +306,13 @@ def build_column_defs() -> list[dict]:
     for key, label in FIELDS:
         col: dict = {
             "headerName": label,
+            "headerTooltip": label,
             "field": key,
             "editable": True,
             "flex": 1,
             "minWidth": 120,
             "filter": "agTextColumnFilter",
+            "tooltipField": key,
             # Highlight cells whose field name appears in the _low confidence list
             "cellClassRules": {
                 "cell-warn": f"data._low && data._low.includes('{key}')",

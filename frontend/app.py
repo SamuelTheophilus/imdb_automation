@@ -8,6 +8,7 @@ from nicegui import app, ui
 # Importing this module registers the /login and /signup pages with NiceGUI.
 import frontend.auth_pages  # noqa: F401
 from backend.db import init_db, list_batch_jobs, list_extraction_versions, list_user_extractions
+from frontend.state import db_record_to_row, set_batch_jobs_refresh
 from backend.normalizer import load_canonical_brands
 from frontend.auth_pages import require_user
 from frontend.components import (
@@ -55,7 +56,7 @@ async def _batch_poll_loop() -> None:
         except Exception as exc:
             log.error("[batch_poller] unhandled error in cycle #%d: %s", cycle, exc)
         log.info("[batch_poller] cycle #%d done — next in 5 min", cycle)
-        await asyncio.sleep(300)
+        await asyncio.sleep(120)
 
 
 @app.on_startup
@@ -71,20 +72,34 @@ _STATUS_STYLE = {
 
 
 def _render_batch_jobs_section(user_id: int) -> None:
-    """Show the user's recent batch jobs with auto-refresh every 60 seconds.
+    """Batch jobs panel — always rendered, auto-refreshes every 10 seconds.
 
-    Only renders when there is at least one job in the last 48 hours.
+    When a job transitions to completed, the grid is also reloaded from DB
+    so results appear without a page refresh.
     """
     from datetime import datetime, timedelta, timezone
+    from frontend.state import get_grid, row_data
 
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
-    jobs = [j for j in list_batch_jobs(user_id) if j["submitted_at"] >= cutoff]
-    if not jobs:
-        return
+    _last_statuses: dict[int, str] = {}
 
     @ui.refreshable
     def _jobs_cards() -> None:
         fresh = [j for j in list_batch_jobs(user_id) if j["submitted_at"] >= cutoff]
+
+        # Detect jobs that just completed and reload the grid
+        for job in fresh:
+            prev = _last_statuses.get(job["id"])
+            if prev == "pending" and job["status"] == "completed":
+                saved = list_user_extractions(user_id)
+                row_data.clear()
+                row_data.extend(db_record_to_row(r, i) for i, r in enumerate(saved))
+                grid = get_grid()
+                if grid:
+                    grid.options["rowData"] = list(row_data)
+                    grid.update()
+            _last_statuses[job["id"]] = job["status"]
+
         if not fresh:
             return
 
@@ -127,7 +142,8 @@ def _render_batch_jobs_section(user_id: int) -> None:
                         ui.spinner(size="sm").style("color:#f59e0b; flex-shrink:0")
 
     _jobs_cards()
-    ui.timer(60, _jobs_cards.refresh)
+    set_batch_jobs_refresh(_jobs_cards.refresh)
+    ui.timer(10, _jobs_cards.refresh)
 
 
 
@@ -166,6 +182,7 @@ def main_page():
         _render_batch_jobs_section(user["id"])
         render_legend()
         render_grid()
+
 
     # ── Tour ─────────────────────────────────────────────────────────────────
     # Fire once for first-time users; the "?" header button lets anyone replay.

@@ -76,12 +76,19 @@ Editable UI review → CSV / Excel export
 - `zbar` system library (for barcode decoding)
 
 ```bash
-# macOS
+# macOS (Intel)
 brew install zbar
+
+# macOS (Apple Silicon — M1/M2/M3/M4)
+brew install zbar
+mkdir -p ~/lib
+ln -s $(brew --prefix zbar)/lib/libzbar.dylib ~/lib/libzbar.dylib
 
 # Ubuntu / Debian
 sudo apt-get install libzbar0
 ```
+
+> **Windows:** Native `zbar` support requires additional setup. We recommend using WSL2 or testing via the [live demo](https://samueltheophilus-imdb-autofill.hf.space) instead.
 
 ### 1. Clone and install
 

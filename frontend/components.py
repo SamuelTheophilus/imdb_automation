@@ -738,6 +738,8 @@ def _render_bulk_tab(user: dict | None) -> None:
             return
 
         hide_processing()
+        from frontend.state import refresh_batch_jobs
+        refresh_batch_jobs()
         ui.notify(
             f"Batch job queued · {n} images · you'll receive results at {email}",
             type="positive",
@@ -876,13 +878,16 @@ def render_grid():
                 "rowData": row_data,
                 "rowHeight": 54,
                 "rowClassRules": {
-                    "row-ok":   "data._status === 'ok'",
-                    "row-warn": "data._status === 'warn'",
-                    "row-dupe": "data._status === 'duplicate'",
+                    "row-ok":     "data._status === 'ok'",
+                    "row-warn":   "data._status === 'warn'",
+                    "row-dupe":   "data._status === 'duplicate'",
+                    "row-failed": "data._status === 'failed'",
                 },
                 "animateRows": True,
                 "rowSelection": "multiple",
                 "suppressRowClickSelection": True,
+                "tooltipShowDelay": 400,
+                "tooltipHideDelay": 3000,
             },
             theme="alpine",
         )
