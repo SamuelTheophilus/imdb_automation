@@ -45,20 +45,22 @@ def refresh_batch_jobs() -> None:
 # FIELDS drives both the AG Grid column list and the review drawer inputs.
 # Each tuple is (schema_field_name, display_label).
 FIELDS: list[tuple[str, str]] = [
-    ("barcode",            "Barcode"),
-    ("category_type",      "Type"),
-    ("manufacturer",       "Manufacturer"),
-    ("brand",              "Brand"),
-    ("product_name",       "Product Name"),
-    ("weight",             "Weight"),          # combined e.g. "100G", "1.5 KG"
-    ("packaging_type",     "Packaging"),
-    ("country_of_origin",  "Country"),
-    ("variant",            "Variant"),
-    ("fragrance_flavor",   "Fragrance / Flavor"),
+    # Order matches the export sheet columns exactly
+    ("product_name",         "Item Name"),
+    ("barcode",              "Barcode"),
+    ("manufacturer",         "Manufacturer"),
+    ("brand",                "Brand"),
+    ("weight",               "Weight"),
+    ("packaging_type",       "Packaging Type"),
+    ("country_of_origin",    "Country"),
+    ("variant",              "Variant"),
+    ("category_type",        "Type"),
+    ("fragrance_flavor",     "Fragrance / Flavor"),
     ("promotional_messages", "Promotion"),
-    ("addons",             "Add-ons"),
-    ("tagline",            "Tagline"),
-    ("segment_type",       "Segment"),
+    ("addons",               "Add-ons"),
+    ("tagline",              "Tagline"),
+    # Not in export sheet — kept for internal reference
+    ("segment_type",         "Segment"),
 ]
 
 # Column order for the dataset submission file — must match the ground truth.
