@@ -214,6 +214,12 @@ def _render_form_panel(default_mode: str) -> None:
 
 # ── Routes ───────────────────────────────────────────────────────────────────
 
+@ui.page("/force-logout")
+def force_logout_page():
+    """Auto-logout endpoint — used by the mobile/tablet wall countdown redirect."""
+    logout()
+
+
 @ui.page("/login")
 def login_page():
     _landing_page("login")
@@ -237,6 +243,7 @@ def reset_password_page():
         "border-radius:20px; padding:44px 40px; gap:0; align-items:stretch;"
         "box-shadow:0 32px 72px rgba(0,0,0,0.55);"
     )
+    # lp-reset-card class enables the responsive override in app_styling.j2
     _DIVIDER = "height:1px; background:rgba(240,225,205,0.08); margin:22px 0 20px"
 
     with ui.column().classes("w-full h-screen items-center justify-center").style(
@@ -244,7 +251,7 @@ def reset_password_page():
         "background-image:radial-gradient(ellipse 600px 500px at 50% 38%,"
         " rgba(99,102,241,0.07) 0%, transparent 60%);"
     ):
-        with ui.column().style(_CARD):
+        with ui.column().classes("lp-reset-card").style(_CARD):
             ui.link("← Back to sign in", "/login").style(_LINK_STYLE)
             ui.element("div").style(_DIVIDER)
             ui.html('<p style="font-size:20px;font-weight:700;color:#e8e3dc;'

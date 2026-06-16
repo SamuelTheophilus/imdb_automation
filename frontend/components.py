@@ -47,6 +47,21 @@ def _on_slide_change(e) -> None:
 
 _PROC_HEAD = """
 <style>
+  /* ── mobile / tablet wall ───────────────────────────────────────────── */
+  #_app_wall {
+    display: none;
+    position: fixed; inset: 0; z-index: 9999;
+    background: #1a1816;
+    flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px; padding: 40px 28px; text-align: center;
+    font-family: Inter, sans-serif;
+  }
+  #_app_wall ._wall_icon   { opacity: 0.3; color: #f0ebe5; }
+  #_app_wall ._wall_title  { margin:0; font-size:18px; font-weight:700; color:#f0ebe5; letter-spacing:-0.4px; }
+  #_app_wall ._wall_sub    { margin:0; font-size:13px; color:#52504c; line-height:1.65; max-width:300px; }
+  #_app_wall ._wall_cd     { margin:0; font-size:12px; color:#3d5166; font-style:italic; }
+  @media (max-width: 1023px) { #_app_wall { display: flex; } }
+  /* ── processing toast ──────────────────────────────────────────────── */
   @keyframes _proc_spin { to { transform: rotate(360deg); } }
   #_proc_card {
     display: none;
@@ -82,6 +97,22 @@ _PROC_HEAD = """
   function _procHide() {
     document.getElementById('_proc_card').style.display = 'none';
   }
+  /* Auto-logout countdown for small screens */
+  (function () {
+    function _startWallCountdown() {
+      var w = document.getElementById('_app_wall');
+      if (!w || window.getComputedStyle(w).display === 'none') return;
+      var secs = 15;
+      var cd = document.getElementById('_wall_cd');
+      var t = setInterval(function () {
+        secs -= 1;
+        if (cd) cd.textContent = 'Signing you out in ' + secs + 's…';
+        if (secs <= 0) { clearInterval(t); window.location.href = '/force-logout'; }
+      }, 1000);
+    }
+    /* Delay slightly so CSS media query has been applied before we check display */
+    setTimeout(_startWallCountdown, 600);
+  })();
 </script>
 """
 
@@ -93,10 +124,32 @@ _PROC_DIVS = """
 </div>
 """
 
+_WALL_DIVS = """
+<div id="_app_wall">
+  <svg class="_wall_icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+       fill="none" stroke="currentColor" stroke-width="1.5"
+       stroke-linecap="round" stroke-linejoin="round"
+       width="52" height="52">
+    <rect x="2" y="3" width="20" height="13" rx="2"/>
+    <line x1="12" y1="16" x2="12" y2="21"/>
+    <line x1="8"  y1="21" x2="16" y2="21"/>
+  </svg>
+  <p class="_wall_title">Best on a larger screen</p>
+  <p class="_wall_sub">
+    This workspace is designed for wider screens.
+    Please open it on a larger display for the best experience.
+  </p>
+  <p class="_wall_cd" id="_wall_cd">Signing you out in 15s…</p>
+</div>
+"""
+
 
 def render_processing_overlay() -> None:
     ui.add_head_html(_PROC_HEAD)
-    ui.html(_PROC_DIVS)
+    # add_body_html writes to client._body_html → rendered into initial HTML
+    # before #app, bypassing both DOMPurify and WebSocket requirements
+    ui.add_body_html(_PROC_DIVS)
+    ui.add_body_html(_WALL_DIVS)
 
 
 def show_processing(message: str = "Processing…") -> None:

@@ -587,4 +587,42 @@ body, .q-body--dark {
 .imdb-tour-popover .driver-popover-arrow-side-right.driver-popover-arrow { border-right-color: #242220 !important; }
 .imdb-tour-popover .driver-popover-arrow-side-top.driver-popover-arrow   { border-top-color:   #242220 !important; }
 .imdb-tour-popover .driver-popover-arrow-side-bottom.driver-popover-arrow{ border-bottom-color:#242220 !important; }
+
+/* ── Responsive: auth / landing pages ───────────────────────────────────────── */
+
+/* Tablet (768–1023px): shrink hero, keep split layout */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .landing-hero          { flex: 0 0 44%; padding: 52px 40px; }
+  .lp-title              { font-size: 32px; letter-spacing: -1.2px; }
+  .lp-title-line2        { font-size: 26px; }
+  .lp-sub                { font-size: 13px; margin: 16px 0 28px; }
+  .landing-form-panel    { flex: 0 0 56%; padding: 52px 36px; }
+}
+
+/* Mobile (<768px): hide hero entirely, form fills the screen */
+@media (max-width: 767px) {
+  .landing-root          { flex-direction: column; }
+  .landing-hero          { display: none; }
+  .landing-form-panel    {
+    flex: 1 1 auto;
+    width: 100%;
+    border-left: none;
+    padding: 48px 24px 40px;
+    justify-content: flex-start;
+    padding-top: 60px;
+  }
+  .lp-form-wrap          { max-width: 100%; }
+  .lp-form-title         { font-size: 22px !important; }
+}
+
+/* Reset-password card: fluid on small screens */
+@media (max-width: 520px) {
+  .lp-reset-card {
+    width: calc(100vw - 32px) !important;
+    min-width: 0 !important;
+    padding: 36px 24px !important;
+    border-radius: 14px !important;
+  }
+}
+
 </style>

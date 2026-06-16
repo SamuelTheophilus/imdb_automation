@@ -159,6 +159,7 @@ def main_page():
         db_record_to_row(record, idx) for idx, record in enumerate(saved_records)
     )
 
+
     render_header()
     render_review_drawer()
 
