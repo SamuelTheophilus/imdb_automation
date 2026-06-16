@@ -126,6 +126,21 @@ def init_db() -> None:
 
                 FOREIGN KEY(extraction_id) REFERENCES extractions(id)
             );
+
+            CREATE TABLE IF NOT EXISTS batch_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                anthropic_batch_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                image_paths_json TEXT NOT NULL,
+                request_map_json TEXT NOT NULL,
+                notify_email TEXT,
+                submitted_at TEXT NOT NULL,
+                completed_at TEXT,
+                result_count INTEGER,
+                error_message TEXT,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            );
             """
         )
         _migrate_users(conn)
@@ -455,3 +470,86 @@ def list_extraction_versions(extraction_id: int) -> list[dict[str, Any]]:
         item["confidence"] = json.loads(item["confidence_json"])
         versions.append(item)
     return versions
+
+
+# ── Batch jobs ────────────────────────────────────────────────────────────────
+
+def create_batch_job(
+    *,
+    user_id: int,
+    anthropic_batch_id: str,
+    image_paths: list,
+    request_map: dict,
+    notify_email: str | None = None,
+) -> int:
+    """Persist a new batch job and return its id."""
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO batch_jobs (
+                user_id, anthropic_batch_id, status,
+                image_paths_json, request_map_json,
+                notify_email, submitted_at
+            ) VALUES (?, ?, 'pending', ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                anthropic_batch_id,
+                json.dumps([str(p) for p in image_paths]),
+                json.dumps(request_map),
+                notify_email or None,
+                _utc_now(),
+            ),
+        )
+        return int(cursor.lastrowid)
+
+
+def list_pending_batch_jobs() -> list[dict[str, Any]]:
+    """Return all jobs in 'pending' status across all users (for the poller)."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM batch_jobs WHERE status = 'pending' ORDER BY submitted_at ASC"
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_batch_jobs(user_id: int) -> list[dict[str, Any]]:
+    """Return all batch jobs for one user, newest first."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM batch_jobs WHERE user_id = ? ORDER BY submitted_at DESC",
+            (user_id,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_batch_job(job_id: int) -> dict[str, Any] | None:
+    """Fetch a single batch job by its id."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM batch_jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def update_batch_job_status(
+    job_id: int,
+    status: str,
+    *,
+    result_count: int | None = None,
+    error_message: str | None = None,
+) -> None:
+    """Update the status of a batch job, optionally recording result count or error."""
+    now = _utc_now()
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE batch_jobs
+            SET status = ?,
+                completed_at = CASE WHEN ? IN ('completed', 'failed') THEN ? ELSE completed_at END,
+                result_count = COALESCE(?, result_count),
+                error_message = COALESCE(?, error_message)
+            WHERE id = ?
+            """,
+            (status, status, now, result_count, error_message, job_id),
+        )

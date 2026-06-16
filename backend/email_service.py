@@ -4,6 +4,16 @@ import os
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from pathlib import Path
+
+from jinja2 import Environment, FileSystemLoader
+
+_TEMPLATES_DIR = Path(__file__).parent.parent / "core" / "emails"
+_env = Environment(loader=FileSystemLoader(str(_TEMPLATES_DIR)))
+
+
+def _render(template_name: str, **ctx) -> str:
+    return _env.get_template(template_name).render(**ctx)
 
 
 def _gmail_credentials() -> tuple[str, str]:
@@ -17,16 +27,14 @@ def _gmail_credentials() -> tuple[str, str]:
     return user, password
 
 
-def send_password_reset(to_email: str, code: str) -> None:
-    """Send a password reset code via Gmail SMTP."""
+def _send(to_email: str, subject: str, html: str) -> None:
+    """Send an HTML email via Gmail SMTP."""
     gmail_user, gmail_password = _gmail_credentials()
-
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = "Your IMDB AutoFill password reset code"
+    msg["Subject"] = subject
     msg["From"] = f"IMDB AutoFill <{gmail_user}>"
     msg["To"] = to_email
-    msg.attach(MIMEText(_reset_email_html(code), "html"))
-
+    msg.attach(MIMEText(html, "html"))
     with smtplib.SMTP("smtp.gmail.com", 587) as smtp:
         smtp.ehlo()
         smtp.starttls()
@@ -34,65 +42,19 @@ def send_password_reset(to_email: str, code: str) -> None:
         smtp.sendmail(gmail_user, to_email, msg.as_string())
 
 
-def _reset_email_html(code: str) -> str:
-    return f"""
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-</head>
-<body style="margin:0;padding:0;background:#f5f4f2;font-family:Inter,Arial,sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0">
-    <tr>
-      <td align="center" style="padding:48px 16px;">
-        <table width="480" cellpadding="0" cellspacing="0"
-               style="background:#1e1c19;border-radius:16px;overflow:hidden;">
-          <tr>
-            <td style="padding:36px 40px 28px;border-bottom:1px solid rgba(240,225,205,0.08);">
-              <p style="margin:0;font-size:13px;font-weight:600;color:#818cf8;
-                         letter-spacing:0.5px;text-transform:uppercase;">
-                IMDB Auto-Fill
-              </p>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding:36px 40px 12px;">
-              <p style="margin:0 0 8px;font-size:22px;font-weight:700;
-                         color:#f0ebe5;letter-spacing:-0.5px;">
-                Password reset code
-              </p>
-              <p style="margin:0;font-size:14px;color:#6b6560;line-height:1.6;">
-                Use the code below to reset your password. It expires in
-                <strong style="color:#a09890;">10 minutes</strong>.
-              </p>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding:24px 40px;">
-              <div style="background:rgba(99,102,241,0.1);
-                           border:1px solid rgba(99,102,241,0.3);
-                           border-radius:10px;padding:20px;text-align:center;">
-                <p style="margin:0;font-size:36px;font-weight:700;
-                           letter-spacing:10px;color:#818cf8;
-                           font-family:'Courier New',monospace;">
-                  {code}
-                </p>
-              </div>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding:8px 40px 36px;">
-              <p style="margin:0;font-size:12px;color:#4a4641;line-height:1.6;">
-                If you didn't request a password reset, you can safely ignore this email.
-                Your password will not change.
-              </p>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>
-"""
+def send_password_reset(to_email: str, code: str) -> None:
+    """Send a password reset code via Gmail SMTP."""
+    html = _render("password_reset.j2", code=code)
+    _send(to_email, "Your IMDB AutoFill password reset code", html)
+
+
+def send_batch_complete(
+    to_email: str,
+    username: str,
+    result_count: int,
+    job_id: int,
+) -> None:
+    """Notify the user that their bulk batch job has completed."""
+    html = _render("batch_complete.j2", username=username, result_count=result_count, job_id=job_id)
+    subject = f"IMDB AutoFill — batch extraction complete ({result_count} products)"
+    _send(to_email, subject, html)

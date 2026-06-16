@@ -1,18 +1,21 @@
 from pathlib import Path
 
-from nicegui import ui
+from nicegui import events, ui
 
 from backend.db import update_extraction_image_paths, update_extraction_status
 from frontend.auth_pages import current_user, logout, render_change_password_dialog
 from frontend.tour import TOUR_JS, TOUR_SAMPLE_ROW
 from frontend.handlers import (
+    QUICK_UPLOAD_LIMIT,
     SAMPLES,
     do_delete_row,
     do_export_csv,
     do_export_excel,
     handle_batch_upload,
+    handle_bulk_start,
     handle_sample,
     persist_row_edits,
+    stage_bulk_files,
 )
 
 from frontend.state import FIELDS, build_column_defs, get_grid, image_to_url, row_data, set_grid
@@ -107,11 +110,27 @@ def hide_processing() -> None:
 
 # ── Tour ─────────────────────────────────────────────────────────────────────
 
-def _replay_tour() -> None:
-    """Open the sample drawer then start the Driver.js tour."""
+def _launch_tour(client=None) -> None:
+    """Used by the first-time tour (called from an already-async context)."""
     import asyncio
-    from frontend.app import _launch_tour
-    _launch_tour()
+    if client is None:
+        client = ui.context.client
+    open_review_drawer(TOUR_SAMPLE_ROW)
+
+    async def _run():
+        await asyncio.sleep(0.7)
+        client.run_javascript(TOUR_JS)
+
+    asyncio.create_task(_run())
+
+
+async def _replay_tour() -> None:
+    """Replay button handler — async so NiceGUI flushes the drawer before the JS fires."""
+    import asyncio
+    client = ui.context.client
+    open_review_drawer(TOUR_SAMPLE_ROW)
+    await asyncio.sleep(0.7)
+    client.run_javascript(TOUR_JS)
 
 
 # ── Header ───────────────────────────────────────────────────────────────────
@@ -522,38 +541,50 @@ async def delete_from_review_drawer():
 # ── Upload zone ──────────────────────────────────────────────────────────────
 
 def render_upload_zone():
+    """Tabbed upload zone: Quick Upload (≤20 images) and Bulk Batch (unlimited)."""
+    user = current_user()
+
+    with ui.column().classes("w-full gap-0"):
+        with ui.tabs().props(
+            "align=left dense indicator-color=indigo-4 active-color=indigo-4"
+        ).style("border-bottom:1px solid rgba(240,225,205,0.07)") as tabs:
+            ui.tab("Quick Upload", icon="upload_file").props("no-caps")
+            ui.tab("Bulk Batch", icon="dynamic_feed").props("no-caps").classes("bulk-batch-tab")
+
+        with ui.tab_panels(tabs, value="Quick Upload").classes("w-full p-0"):
+            with ui.tab_panel("Quick Upload").classes("p-0 pt-3"):
+                _render_quick_tab()
+            with ui.tab_panel("Bulk Batch").classes("p-0 pt-3"):
+                _render_bulk_tab(user)
+
+
+def _render_quick_tab() -> None:
+    """Original instant-processing upload zone, capped at QUICK_UPLOAD_LIMIT images."""
     with ui.element("div").classes("upload-zone w-full").style(
         "position:relative; min-height:190px"
     ):
-        # Decorative layer — visual only, pointer-events:none so clicks pass through
         with ui.column().classes("items-center justify-center gap-3").style(
             "position:absolute; inset:0; pointer-events:none; padding:36px 20px; z-index:5"
         ):
-            ui.icon("cloud_upload", size="2rem").style(
-                "color:rgba(99,102,241,0.5)"
-            )
+            ui.icon("cloud_upload", size="2rem").style("color:rgba(99,102,241,0.5)")
             with ui.column().classes("items-center gap-1"):
                 ui.label("Drop product images here").style(
                     "color:#64748b; font-size:14px; font-weight:500;"
                     "font-family:Inter,sans-serif; letter-spacing:-0.1px"
                 )
                 ui.label(
-                    "Multiple angles of the same product will be grouped automatically"
-                ).style(
-                    "color:#263344; font-size:12px; font-family:Inter,sans-serif"
-                )
-            # Decorative "Add images" button — purely visual, not interactive
-            with ui.element("div").classes("upload-add-btn").style(
+                    f"Up to {QUICK_UPLOAD_LIMIT} images · "
+                    "multiple angles are grouped automatically"
+                ).style("color:#263344; font-size:12px; font-family:Inter,sans-serif")
+            with ui.element("div").style(
                 "margin-top:6px; padding:7px 20px;"
                 "border:1px solid rgba(99,102,241,0.22); border-radius:8px;"
-                "font-size:12px; font-weight:500;"
-                "font-family:Inter,sans-serif; letter-spacing:0.1px;"
+                "font-size:12px; font-weight:500; font-family:Inter,sans-serif;"
             ):
-                ui.label("Add images").classes("upload-add-btn__label").style(
+                ui.label("Add images").style(
                     "color:#818cf8; font-family:Inter,sans-serif; font-size:12px"
                 )
 
-        # Full-zone transparent uploader overlay — handles all clicks + drag-drop
         ui.upload(
             multiple=True,
             on_multi_upload=handle_batch_upload,
@@ -562,7 +593,7 @@ def render_upload_zone():
             "upload-zone-cover"
         )
 
-    # ── Sample picker ──────────────────────────────────────────────────────────
+    # ── Sample picker ──────────────────────────────────────────────────────
     with ui.row().classes("w-full justify-center items-center gap-2 mt-2"):
         ui.label("or").style("color:#334155; font-size:12px;")
         toggle_label = ui.label("try a sample →").style(
@@ -606,6 +637,198 @@ def render_upload_zone():
         toggle_label.text = "hide samples ↑" if _sample_open[0] else "try a sample →"
 
     toggle_label.on("click", _toggle_samples)
+
+
+def _render_bulk_tab(user: dict | None) -> None:
+    """Bulk upload zone — unlimited images, staged then submitted via Batch API."""
+    staged_paths: list[Path] = []
+    counters = {"skipped": 0}
+
+    # ── Callbacks (defined before UI so we can pass them as on_* args) ────────
+    # All UI variables are closed over and resolved at call-time (not def-time),
+    # so it's safe to reference elements created after these functions.
+
+    async def _on_bulk_staged(e: events.MultiUploadEventArguments) -> None:
+        new_saved, new_skipped = await stage_bulk_files(e)
+        staged_paths.extend(new_saved)
+        counters["skipped"] += new_skipped
+
+        n = len(staged_paths)
+        sk = counters["skipped"]
+        skip_txt = (
+            f" · {sk} non-image file{'s' if sk != 1 else ''} skipped" if sk else ""
+        )
+        count_label.set_text(f"{n} image{'s' if n != 1 else ''} ready{skip_txt}")
+        start_btn.set_text(f"Start Batch Processing · {n} image{'s' if n != 1 else ''}")
+
+        # Update drop-zone hint to "staged" state
+        hint_empty.set_visibility(False)
+        staged_hint_label.set_text(
+            f"{n} image{'s' if n != 1 else ''} staged — drop more to add"
+        )
+        hint_staged.set_visibility(True)
+
+        staging_area.set_visibility(True)
+
+    def _clear() -> None:
+        staged_paths.clear()
+        counters["skipped"] = 0
+        staging_area.set_visibility(False)
+        hint_staged.set_visibility(False)
+        hint_empty.set_visibility(True)
+
+    async def _on_start() -> None:
+        n = len(staged_paths)
+        if n == 0:
+            return
+        email = email_input.value.strip()
+        if not email:
+            ui.notify(
+                "Please enter an email address so we can notify you when results are ready.",
+                type="warning",
+                position="center",
+            )
+            return
+
+        with ui.dialog() as dlg, ui.card().classes("p-6 gap-4").style(
+            "min-width:380px; max-width:480px;"
+            "background:#1e1c19; border:1px solid rgba(99,102,241,0.25);"
+            "border-radius:12px;"
+        ):
+            ui.label("Confirm batch processing").classes("text-base font-semibold").style(
+                "color:#f0ebe5"
+            )
+            with ui.column().classes("gap-2 py-1"):
+                for line in [
+                    f"{n} image{'s' if n != 1 else ''} will be submitted for extraction",
+                    f"Results emailed to  {email}",
+                    "Processing takes up to 24 hours",
+                    "You can close this page — results are saved to your account",
+                ]:
+                    with ui.row().classes("items-start gap-2"):
+                        ui.icon("chevron_right", size="1rem").style(
+                            "color:#6366f1; margin-top:1px; flex-shrink:0"
+                        )
+                        ui.label(line).style("color:#94a3b8; font-size:13px; line-height:1.5")
+            with ui.row().classes("justify-end gap-2 w-full pt-2"):
+                ui.button("Cancel", on_click=lambda: dlg.submit(False)).props(
+                    "flat color=white"
+                ).classes("text-xs")
+                ui.button(
+                    f"Submit {n} images",
+                    on_click=lambda: dlg.submit(True),
+                ).props("unelevated color=indigo-5").classes("text-xs")
+
+        if not await dlg:
+            return
+
+        show_processing(f"Queuing {n} images for batch extraction…")
+        try:
+            await handle_bulk_start(list(staged_paths), email, user)
+        except Exception as exc:
+            hide_processing()
+            ui.notify(f"Failed to queue batch: {exc}", type="negative", position="center")
+            return
+
+        hide_processing()
+        ui.notify(
+            f"Batch job queued · {n} images · you'll receive results at {email}",
+            type="positive",
+            position="center",
+            timeout=8000,
+        )
+        _clear()
+
+    # ── Drop zone ───────────────────────────────────────────────────────────────
+    with ui.element("div").classes("upload-zone w-full").style(
+        "position:relative; min-height:190px"
+    ):
+        with ui.column().classes("items-center justify-center gap-3").style(
+            "position:absolute; inset:0; pointer-events:none; padding:36px 20px; z-index:5"
+        ):
+            # Empty-state hint
+            hint_empty = ui.column().classes("items-center gap-2")
+            with hint_empty:
+                ui.icon("dynamic_feed", size="2rem").style("color:rgba(99,102,241,0.5)")
+                with ui.column().classes("items-center gap-1"):
+                    ui.label("Drop all product images here — no limit").style(
+                        "color:#64748b; font-size:14px; font-weight:500;"
+                        "font-family:Inter,sans-serif; letter-spacing:-0.1px"
+                    )
+                    ui.label(
+                        "Images are queued and extracted via Anthropic Batch API · results in ~24 hrs"
+                    ).style(
+                        "color:#263344; font-size:12px; font-family:Inter,sans-serif;"
+                        "text-align:center"
+                    )
+                with ui.element("div").style(
+                    "margin-top:6px; padding:7px 20px;"
+                    "border:1px solid rgba(99,102,241,0.22); border-radius:8px;"
+                    "font-size:12px; font-weight:500; font-family:Inter,sans-serif;"
+                ):
+                    ui.label("Choose images").style(
+                        "color:#818cf8; font-family:Inter,sans-serif; font-size:12px"
+                    )
+
+            # Staged-state hint (hidden until files are uploaded)
+            hint_staged = ui.column().classes("items-center gap-2")
+            hint_staged.set_visibility(False)
+            with hint_staged:
+                ui.icon("check_circle", size="2rem").style("color:rgba(16,185,129,0.6)")
+                staged_hint_label = ui.label("").style(
+                    "color:#10b981; font-size:14px; font-weight:500;"
+                    "font-family:Inter,sans-serif"
+                )
+                ui.label("Drop more images to add them to the batch").style(
+                    "color:#1e3a2e; font-size:12px; font-family:Inter,sans-serif"
+                )
+
+        # Transparent full-zone uploader overlay
+        ui.upload(
+            multiple=True,
+            auto_upload=True,
+            on_multi_upload=_on_bulk_staged,
+        ).props('accept=".jpg,.jpeg,.png,.webp" flat label=""').classes(
+            "upload-zone-cover"
+        )
+
+    # ── Staging info + controls (hidden until first upload) ────────────────────
+    staging_area = ui.column().classes("w-full gap-3 px-1 pt-3 pb-1")
+    staging_area.set_visibility(False)
+
+    with staging_area:
+        # Count + clear row
+        with ui.row().classes("w-full items-center gap-2"):
+            ui.icon("check_circle", size="1rem").style("color:#10b981; flex-shrink:0")
+            count_label = ui.label("").style(
+                "color:#10b981; font-size:13px; font-weight:500;"
+                "font-family:Inter,sans-serif; flex:1"
+            )
+            ui.button("Clear", icon="clear_all", on_click=_clear).props(
+                "flat dense color=grey-6"
+            ).classes("text-xs")
+
+        # Email notification row
+        with ui.row().classes("w-full items-center gap-3"):
+            ui.icon("mail_outline", size="1rem").style("color:#475569; flex-shrink:0")
+            ui.label("Notify when done:").style(
+                "color:#64748b; font-size:12px; font-family:Inter,sans-serif;"
+                "white-space:nowrap"
+            )
+            email_input = ui.input(
+                placeholder="you@example.com",
+                value=user.get("email", "") if user else "",
+            ).classes("flex-1").style("font-size:13px")
+
+        # Start button row
+        with ui.row().classes("w-full justify-end"):
+            start_btn = ui.button(
+                "Start Batch Processing",
+                icon="rocket_launch",
+                on_click=_on_start,
+            ).props("unelevated color=indigo-5").style(
+                "font-size:13px; font-weight:600; padding:0 20px; height:38px"
+            )
 
 
 # ── Legend ───────────────────────────────────────────────────────────────────

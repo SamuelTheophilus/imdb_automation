@@ -1,3 +1,4 @@
+import logging
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -10,6 +11,9 @@ from backend.db import create_extraction, delete_extraction, update_extraction_f
 from backend.pipeline import PipelineResult, run_pipeline
 from frontend.auth_pages import current_user
 from frontend.state import FIELDS, get_grid, result_to_row, row_data, row_to_export_dict
+
+QUICK_UPLOAD_LIMIT = 20
+BULK_IMAGE_EXTS = frozenset({".jpg", ".jpeg", ".png", ".webp"})
 
 SAMPLES: dict[str, dict] = {
     "milo": {
@@ -47,6 +51,15 @@ async def handle_batch_upload(e: events.MultiUploadEventArguments):
         return
     if not e.files:
         ui.notify("No files selected", type="warning", position="center")
+        return
+    if len(e.files) > QUICK_UPLOAD_LIMIT:
+        ui.notify(
+            f"Quick Upload is limited to {QUICK_UPLOAD_LIMIT} images. "
+            f"You selected {len(e.files)} — use the Bulk Batch tab for larger sets.",
+            type="warning",
+            position="center",
+            timeout=6000,
+        )
         return
 
     upload_dir = Path("data/uploads")
@@ -223,3 +236,39 @@ async def handle_sample(sample_key: str) -> None:
     n = len(results)
     label = "product" if n == 1 else "products"
     ui.notify(f"{n} {label} extracted from {sample['label']} sample", type="positive", position="center")
+
+
+# ── Bulk Batch upload ─────────────────────────────────────────────────────────
+
+async def stage_bulk_files(
+    e: events.MultiUploadEventArguments,
+) -> tuple[list[Path], int]:
+    """Save uploaded files to disk; return (saved_image_paths, skipped_count).
+
+    Non-image extensions are counted as skipped and not saved.
+    """
+    upload_dir = Path("data/uploads")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    saved: list[Path] = []
+    skipped = 0
+    for file in e.files:
+        suffix = Path(file.name).suffix.lower()
+        if suffix not in BULK_IMAGE_EXTS:
+            skipped += 1
+            continue
+        path = upload_dir / f"bulk_{uuid4().hex[:8]}{suffix}"
+        await file.save(path)
+        saved.append(path)
+    return saved, skipped
+
+
+async def handle_bulk_start(
+    paths: list[Path],
+    notify_email: str,
+    user: dict | None,
+) -> None:
+    """Submit staged images to the Anthropic Batch API and store the job."""
+    if not user:
+        raise ValueError("You must be logged in to submit a batch job.")
+    from backend.batch_processor import submit_bulk_batch
+    await submit_bulk_batch(paths, notify_email, user["id"])

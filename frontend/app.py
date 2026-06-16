@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 from pathlib import Path
 
@@ -6,10 +7,11 @@ from nicegui import app, ui
 
 # Importing this module registers the /login and /signup pages with NiceGUI.
 import frontend.auth_pages  # noqa: F401
-from backend.db import init_db, list_extraction_versions, list_user_extractions
+from backend.db import init_db, list_batch_jobs, list_extraction_versions, list_user_extractions
 from backend.normalizer import load_canonical_brands
 from frontend.auth_pages import require_user
 from frontend.components import (
+    _launch_tour,
     open_review_drawer,
     render_grid,
     render_header,
@@ -22,6 +24,8 @@ from frontend.state import db_record_to_row, row_data
 from frontend.styles import STYLES
 from frontend.tour import TOUR_JS, TOUR_SAMPLE_ROW
 from frontend.utils import format_date
+
+log = logging.getLogger(__name__)
 
 _DRIVER_CDN = (
     '<link rel="stylesheet"'
@@ -37,18 +41,96 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 app.add_static_files("/uploads", UPLOAD_DIR)
 app.add_static_files("/samples", SAMPLES_DIR)
 
+# ── Background batch poller ───────────────────────────────────────────────────
 
-def _launch_tour(client=None) -> None:
-    """Open the review drawer with a sample row then start the Driver.js tour."""
-    if client is None:
-        client = ui.context.client
-    open_review_drawer(TOUR_SAMPLE_ROW)
+async def _batch_poll_loop() -> None:
+    """Poll pending batch jobs every 5 minutes, run forever as background task."""
+    log.info("[batch_poller] background loop started — first poll in 60s")
+    await asyncio.sleep(60)  # let the server settle on startup
+    cycle = 0
+    while True:
+        cycle += 1
+        log.info("[batch_poller] ── poll cycle #%d ──────────────────────────", cycle)
+        try:
+            from backend.batch_processor import poll_pending_jobs
+            await poll_pending_jobs()
+        except Exception as exc:
+            log.error("[batch_poller] unhandled error in cycle #%d: %s", cycle, exc)
+        log.info("[batch_poller] cycle #%d done — next in 5 min", cycle)
+        await asyncio.sleep(300)
 
-    async def _run():
-        await asyncio.sleep(0.7)  # let drawer slide in
-        client.run_javascript(TOUR_JS)
 
-    asyncio.create_task(_run())
+@app.on_startup
+async def _start_batch_poller() -> None:
+    asyncio.create_task(_batch_poll_loop())
+
+
+_STATUS_STYLE = {
+    "pending":   ("schedule",      "#f59e0b", "Processing"),
+    "completed": ("check_circle",  "#10b981", "Complete"),
+    "failed":    ("error_outline", "#ef4444", "Failed"),
+}
+
+
+def _render_batch_jobs_section(user_id: int) -> None:
+    """Show the user's recent batch jobs with auto-refresh every 60 seconds.
+
+    Only renders when there is at least one job in the last 48 hours.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+    jobs = [j for j in list_batch_jobs(user_id) if j["submitted_at"] >= cutoff]
+    if not jobs:
+        return
+
+    @ui.refreshable
+    def _jobs_cards() -> None:
+        fresh = [j for j in list_batch_jobs(user_id) if j["submitted_at"] >= cutoff]
+        if not fresh:
+            return
+
+        with ui.column().classes("w-full gap-2"):
+            ui.label("Batch Jobs").style(
+                "color:#475569; font-size:11px; font-weight:600; letter-spacing:0.5px;"
+                "text-transform:uppercase; font-family:Inter,sans-serif"
+            )
+            for job in fresh:
+                icon_name, color, label = _STATUS_STYLE.get(
+                    job["status"], ("help_outline", "#64748b", job["status"])
+                )
+                n_images = len(__import__("json").loads(job.get("image_paths_json") or "[]"))
+                email = job.get("notify_email") or ""
+                submitted = format_date(job["submitted_at"])
+
+                with ui.row().classes("w-full items-center gap-3 px-4 py-3").style(
+                    "background:#0f1117; border:1px solid rgba(240,225,205,0.06);"
+                    "border-radius:10px;"
+                ):
+                    ui.icon(icon_name, size="1.1rem").style(f"color:{color}; flex-shrink:0")
+                    with ui.column().classes("gap-0 flex-1"):
+                        with ui.row().classes("items-center gap-2"):
+                            ui.label(f"{label} · {n_images} images").style(
+                                f"color:{color}; font-size:13px; font-weight:500;"
+                                "font-family:Inter,sans-serif"
+                            )
+                            if job["status"] == "completed" and job.get("result_count") is not None:
+                                n = job["result_count"]
+                                ui.label(f"· {n} product{'s' if n != 1 else ''} extracted").style(
+                                    "color:#64748b; font-size:12px; font-family:Inter,sans-serif"
+                                )
+                        detail_parts = [f"Submitted {submitted}"]
+                        if email:
+                            detail_parts.append(f"notify {email}")
+                        ui.label(" · ".join(detail_parts)).style(
+                            "color:#334155; font-size:11px; font-family:Inter,sans-serif"
+                        )
+                    if job["status"] == "pending":
+                        ui.spinner(size="sm").style("color:#f59e0b; flex-shrink:0")
+
+    _jobs_cards()
+    ui.timer(60, _jobs_cards.refresh)
+
 
 
 @ui.page("/")
@@ -82,6 +164,7 @@ def main_page():
 
     with ui.column().classes("w-full px-6 py-5 gap-5"):
         render_upload_zone()
+        _render_batch_jobs_section(user["id"])
         render_legend()
         render_grid()
 
@@ -184,6 +267,15 @@ def history_page():
 
 
 if __name__ in {"__main__", "__mp_main__"}:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s  %(levelname)-8s  %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    # Keep NiceGUI / uvicorn / httpx chatter at WARNING so batch logs stand out
+    for _noisy in ("uvicorn", "uvicorn.access", "httpx", "httpcore", "nicegui"):
+        logging.getLogger(_noisy).setLevel(logging.WARNING)
+
     register_coming_soon()
     init_db()
 
@@ -191,7 +283,7 @@ if __name__ in {"__main__", "__mp_main__"}:
     if brands_csv.exists():
         load_canonical_brands(brands_csv)
 
-    print("[APP] starting application.")
+    log.info("IMDB AutoFill starting up")
 
     ui.run(
         favicon="🔎",

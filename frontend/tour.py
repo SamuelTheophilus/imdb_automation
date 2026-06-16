@@ -56,12 +56,24 @@ TOUR_JS = """
       {
         element: '.upload-zone',
         popover: {
-          title: 'Upload product images',
+          title: 'Quick Upload',
           description:
-            'Drop product photos here or click <strong>Add images</strong> to browse. ' +
-            'Upload multiple angles of the same product — they will be grouped automatically.',
+            'Drop up to <strong>20 images</strong> here for instant extraction. ' +
+            'Multiple angles of the same product are grouped automatically.',
           side: 'bottom',
           align: 'center',
+        },
+      },
+      {
+        element: '.bulk-batch-tab',
+        popover: {
+          title: 'Bulk Batch — process hundreds at once',
+          description:
+            'Switch to the <strong>Bulk Batch</strong> tab to submit any number of images. ' +
+            'They are processed overnight via the Anthropic Batch API (50% cost) ' +
+            'and results are emailed to you when ready — no need to stay on the page.',
+          side: 'bottom',
+          align: 'start',
         },
       },
       {
