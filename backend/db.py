@@ -34,6 +34,8 @@ _NEW_EXTRACTION_COLUMNS = [
     "addons",
     "tagline",
     "image_paths_json",
+    "source",
+    "batch_job_id",
 ]
 
 
@@ -310,6 +312,8 @@ def create_extraction(
     user_id: int,
     original_filename: str,
     result: PipelineResult,
+    source: str = "quick",
+    batch_job_id: int | None = None,
 ) -> int:
     """Save a completed extraction and return the database row id."""
     values = _record_values_from_result(result)
@@ -327,7 +331,7 @@ def create_extraction(
                 barcode, category_type, segment_type, manufacturer, brand,
                 product_name, weight, unit, packaging_type, country_of_origin,
                 promotional_messages, variant, fragrance_flavor, addons, tagline,
-                image_paths_json
+                image_paths_json, source, batch_job_id
             )
             VALUES (
                 ?, ?, ?, ?,
@@ -336,7 +340,7 @@ def create_extraction(
                 ?, ?, ?, ?, ?,
                 ?, ?, ?, ?, ?,
                 ?, ?, ?, ?, ?,
-                ?
+                ?, ?, ?
             )
             """,
             (
@@ -370,6 +374,8 @@ def create_extraction(
                 values["addons"],
                 values["tagline"],
                 json.dumps(result.image_paths),
+                source,
+                batch_job_id,
             ),
         )
         extraction_id = int(cursor.lastrowid)

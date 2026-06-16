@@ -29,6 +29,7 @@ row_data: list[dict] = []
 # Callback registered by app.py so components.py can trigger a batch jobs refresh
 # without a circular import.
 _batch_jobs_refresh_fn = None
+_grid_filter_by_client: dict[str, object] = {}
 
 
 def set_batch_jobs_refresh(fn) -> None:
@@ -39,6 +40,19 @@ def set_batch_jobs_refresh(fn) -> None:
 def refresh_batch_jobs() -> None:
     if _batch_jobs_refresh_fn:
         _batch_jobs_refresh_fn()
+
+
+def set_grid_source_filter(fn) -> None:
+    client = ui.context.client
+    _grid_filter_by_client[client.id] = fn
+    client.on_delete(lambda c: _grid_filter_by_client.pop(c.id, None))
+
+
+def switch_to_batch_view() -> None:
+    client = ui.context.client
+    fn = _grid_filter_by_client.get(client.id)
+    if fn:
+        fn("batch")
 
 
 # ── Field definitions ────────────────────────────────────────────────────────
@@ -131,6 +145,14 @@ def result_to_row(result: PipelineResult, idx: int) -> dict:
     else:
         status = "ok"
 
+    # Build duplicate summary for display
+    dupe = result.duplicate_suggestions[0] if result.duplicate_suggestions else None
+    dupe_label = ""
+    if dupe:
+        name = dupe.get("product_name") or dupe.get("brand") or "unknown"
+        reason = dupe.get("match_reason", "")
+        dupe_label = f"{name} · {reason}" if reason else name
+
     row: dict = {
         "id":          idx,
         "thumbnail":   image_to_url(result.image_path),
@@ -139,6 +161,9 @@ def result_to_row(result: PipelineResult, idx: int) -> dict:
         "_status":     status,
         "_normalized": ", ".join(result.normalized_fields) if result.normalized_fields else "",
         "_low":        ", ".join(result.low_confidence_fields) if result.low_confidence_fields else "",
+        "_source":     getattr(result, "source", "quick"),
+        "_batch_id":   getattr(result, "batch_job_id", "") or "",
+        "_dupe_of":    dupe_label,
     }
 
     for key, _ in FIELDS:
@@ -156,6 +181,19 @@ def db_record_to_row(record: dict, idx: int) -> dict:
     raw_paths  = record.get("image_paths_json")
     image_paths = _json.loads(raw_paths) if raw_paths else [record["image_path"]]
 
+    # Rebuild dupe label from stored duplicate_suggestions_json
+    dupe_label = ""
+    raw_dupes = record.get("duplicate_suggestions_json") or "[]"
+    try:
+        dupes = _json.loads(raw_dupes)
+        if dupes:
+            d = dupes[0]
+            name = d.get("product_name") or d.get("brand") or "unknown"
+            reason = d.get("match_reason", "")
+            dupe_label = f"{name} · {reason}" if reason else name
+    except Exception:
+        pass
+
     row: dict = {
         "id":          idx,
         "db_id":       record["id"],
@@ -165,6 +203,9 @@ def db_record_to_row(record: dict, idx: int) -> dict:
         "_status":     record["status"],
         "_normalized": "",
         "_low":        low_fields,
+        "_source":     record.get("source") or "quick",
+        "_batch_id":   str(record.get("batch_job_id") or ""),
+        "_dupe_of":    dupe_label,
     }
     for key, _ in FIELDS:
         row[key] = record.get(key) or ""
@@ -282,6 +323,20 @@ def cell_renderer(renderer_type: str) -> str:
                             </div>
                         `;
                     }
+                    if (p.value === 'duplicate' && p.data && p.data._dupe_of) {
+                        return `
+                            <div style="display:flex;flex-direction:column;justify-content:center;height:100%;gap:2px">
+                                <div style="display:flex;align-items:center;gap:6px">
+                                    <span style="width:6px;height:6px;border-radius:50%;background:${c};display:inline-block;flex-shrink:0"></span>
+                                    <span style="font-size:12px;color:#ef4444;font-family:Inter,sans-serif;font-weight:500">Duplicate</span>
+                                </div>
+                                <span title="${p.data._dupe_of}" style="font-size:10px;color:#64748b;font-family:Inter,sans-serif;
+                                    padding-left:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px">
+                                    of: ${p.data._dupe_of}
+                                </span>
+                            </div>
+                        `;
+                    }
                     return `
                         <div style="display:flex;align-items:center;height:100%;gap:8px">
                             <span style="
@@ -311,6 +366,21 @@ def build_column_defs() -> list[dict]:
             "resizable": False, "editable": False, "sortable": False, "filter": False,
             "pinned": "left",
             ":cellRenderer": cell_renderer("review"),
+        },
+        {
+            "headerName": "Batch",
+            "field": "_batch_id",
+            "width": 90, "minWidth": 90, "maxWidth": 90,
+            "resizable": False, "editable": False, "sortable": False, "filter": False,
+            "pinned": "left",
+            "headerTooltip": "Batch job ID",
+            ":cellRenderer": """function(p) {
+                if (!p.value) return '';
+                return '<span title="Batch job #' + p.value + '" style="'
+                    + 'font-size:10px;color:#475569;font-family:DM Mono,monospace;'
+                    + 'background:rgba(99,102,241,0.08);border-radius:4px;padding:2px 6px">'
+                    + '#' + p.value + '</span>';
+            }""",
         },
         {
             "headerName": "Image",

@@ -16,7 +16,7 @@ from frontend.handlers import (
     stage_bulk_files,
 )
 
-from frontend.state import FIELDS, build_column_defs, get_grid, image_to_url, row_data, set_grid
+from frontend.state import FIELDS, build_column_defs, get_grid, image_to_url, row_data, set_grid, set_grid_source_filter
 
 review_drawer = None
 review_carousel_container = None
@@ -485,6 +485,23 @@ def open_review_drawer(row: dict):
     for key, _ in FIELDS:
         review_inputs[key].value = row.get(key, "")
 
+    # ── Duplicate banner — shown when this row matched an existing entry ──────
+    if review_carousel_container is not None:
+        # Find or create the dupe banner slot (just below the carousel)
+        dupe_of = row.get("_dupe_of", "")
+        if dupe_of and row.get("_status") == "duplicate":
+            with review_carousel_container:
+                ui.html(
+                    f'<div style="background:rgba(239,68,68,0.07);border-left:3px solid #ef4444;'
+                    f'padding:10px 16px;margin:0;">'
+                    f'<p style="margin:0;font-size:11px;font-weight:600;color:#ef4444;'
+                    f'font-family:Inter,sans-serif;letter-spacing:0.3px;text-transform:uppercase;'
+                    f'margin-bottom:3px">Potential duplicate</p>'
+                    f'<p style="margin:0;font-size:12px;color:#94a3b8;font-family:Inter,sans-serif;'
+                    f'line-height:1.5">{dupe_of}</p>'
+                    f'</div>'
+                )
+
     # Update status toggle button label to reflect the row's current state
     _sync_status_btn(row.get("_status", "warn"))
 
@@ -843,23 +860,56 @@ def _render_bulk_tab(user: dict | None) -> None:
 # ── Legend ───────────────────────────────────────────────────────────────────
 
 def render_legend():
-    with (
-        ui.row()
-        .classes("items-center gap-6")
-        .style("font-size:11px; color:#3d5166; font-family:'Inter',sans-serif")
-    ):
-        for color, label in [
-            ("#10b981", "OK"),
-            ("#f59e0b", "Needs review"),
-            ("#ef4444", "Duplicate"),
-        ]:
-            with ui.row().classes("items-center gap-2"):
-                ui.element("span").style(
-                    f"width:7px;height:7px;border-radius:50%;"
-                    f"background:{color};display:inline-block;"
-                    f"box-shadow:0 0 5px {color}55"
+    _PILL = (
+        "padding:4px 12px; border-radius:20px; font-size:11px; font-weight:500;"
+        "font-family:Inter,sans-serif; cursor:pointer; transition:all 0.15s; border:1px solid;"
+    )
+    _ACTIVE = _PILL + "background:rgba(99,102,241,0.15); color:#a5b4fc; border-color:rgba(99,102,241,0.35);"
+    _INACTIVE = _PILL + "background:transparent; color:#334155; border-color:transparent;"
+
+    current = {"filter": "all"}
+
+    with ui.row().classes("w-full items-center justify-between"):
+        # ── Source filter pills (far left) ────────────────────────────────────
+        with ui.row().classes("items-center gap-1"):
+            pills = {}
+
+            def _set_filter(f: str):
+                current["filter"] = f
+                for k, el in pills.items():
+                    el.style(_ACTIVE if k == f else _INACTIVE)
+                filtered = (
+                    row_data if f == "all"
+                    else [r for r in row_data if r.get("_source") == f]
                 )
-                ui.label(label)
+                g = get_grid()
+                if g:
+                    g.options["rowData"] = filtered
+                    g.update()
+
+            for key, label in [("all", "All"), ("quick", "Quick Upload"), ("batch", "Batch")]:
+                el = ui.label(label).style(_ACTIVE if key == "all" else _INACTIVE)
+                el.on("click", lambda k=key: _set_filter(k))
+                pills[key] = el
+
+            set_grid_source_filter(_set_filter)
+
+        # ── Status legend (right) ─────────────────────────────────────────────
+        with ui.row().classes("items-center gap-6").style(
+            "font-size:11px; color:#3d5166; font-family:'Inter',sans-serif"
+        ):
+            for color, label in [
+                ("#10b981", "OK"),
+                ("#f59e0b", "Needs review"),
+                ("#ef4444", "Duplicate"),
+            ]:
+                with ui.row().classes("items-center gap-2"):
+                    ui.element("span").style(
+                        f"width:7px;height:7px;border-radius:50%;"
+                        f"background:{color};display:inline-block;"
+                        f"box-shadow:0 0 5px {color}55"
+                    )
+                    ui.label(label)
 
 
 # ── Grid ─────────────────────────────────────────────────────────────────────

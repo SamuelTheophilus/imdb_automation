@@ -7,7 +7,7 @@ from uuid import uuid4
 import pandas as pd
 from nicegui import events, ui
 
-from backend.db import create_extraction, delete_extraction, update_extraction_fields
+from backend.db import create_extraction, delete_extraction, list_user_extractions, update_extraction_fields
 from backend.pipeline import PipelineResult, run_pipeline
 from frontend.auth_pages import current_user
 from frontend.state import FIELDS, failed_row, get_grid, result_to_row, row_data, row_to_export_dict
@@ -59,7 +59,8 @@ async def handle_batch_upload(e: events.MultiUploadEventArguments):
     show_processing(f"Processing {upload_label}…")
 
     try:
-        results: list[PipelineResult] = await run_pipeline(saved_paths)
+        existing_records = list_user_extractions(user["id"])
+        results: list[PipelineResult] = await run_pipeline(saved_paths, existing_records=existing_records)
     except Exception as exc:
         if getattr(client, "_deleted", False):
             return

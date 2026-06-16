@@ -302,40 +302,91 @@ def check_duplicate(
     record: IMDBRecordWithConfidence,
     existing_records: list[dict],
     barcode_match: bool = True,
-    similarity_threshold: float = 0.95,
+    similarity_threshold: float = 0.85,
 ) -> list[dict]:
     """Check whether a newly extracted record duplicates an existing IMDB entry.
 
-    Two matching rules, applied in order:
-    1. Exact barcode match — definite duplicate.
-    2. Brand + product_name fuzzy similarity ≥ threshold — probable duplicate.
+    Scoring (out of 1.0):
+      - Brand similarity     : 40%
+      - Product name sim.    : 40%
+      - Weight exact match   : +10% bonus
+      - Manufacturer sim.    : 20% (used only when brand is missing)
+    Threshold: 0.85.
+
+    Rule 0 (short-circuit): exact barcode match → definite duplicate.
 
     Returns a list of matching existing records (empty means no duplicates).
+    Each match includes 'match_reason' and 'match_score'.
     """
     duplicates = []
 
     for existing in existing_records:
-        # Rule 1: exact barcode
+        # Rule 0: exact barcode — definitive, no further scoring needed
         if (
             barcode_match
             and record.barcode
             and existing.get("barcode")
-            and record.barcode == existing["barcode"]
+            and str(record.barcode).strip() == str(existing["barcode"]).strip()
         ):
-            duplicates.append({**existing, "match_reason": "Exact barcode match"})
+            duplicates.append({
+                **existing,
+                "match_reason": "Exact barcode match",
+                "match_score": 1.0,
+            })
             continue
 
-        # Rule 2: brand + product name similarity
-        if record.brand and record.product_name:
-            existing_brand = existing.get("brand", "") or ""
-            existing_name  = existing.get("product_name", "") or ""
-            brand_score = fuzz.WRatio(record.brand, existing_brand) / 100
-            name_score  = fuzz.WRatio(record.product_name, existing_name) / 100
-            combined    = (brand_score + name_score) / 2
-            if combined >= similarity_threshold:
-                duplicates.append({
-                    **existing,
-                    "match_reason": f"Brand + name similarity ({combined:.0%})",
-                })
+        # Composite scoring
+        existing_brand = (existing.get("brand") or "").strip()
+        existing_name  = (existing.get("product_name") or "").strip()
+        existing_mfr   = (existing.get("manufacturer") or "").strip()
+        existing_weight = (existing.get("weight") or "").strip().upper()
 
+        new_brand  = (record.brand or "").strip()
+        new_name   = (record.product_name or "").strip()
+        new_mfr    = (record.manufacturer or "").strip()
+        new_weight = (getattr(record, "weight", None) or "").strip().upper()
+
+        if not new_name:
+            continue
+
+        if new_brand and existing_brand:
+            brand_score = fuzz.WRatio(new_brand, existing_brand) / 100
+            name_score  = fuzz.WRatio(new_name, existing_name)  / 100
+            score = brand_score * 0.4 + name_score * 0.4
+        elif new_mfr and existing_mfr:
+            # Fall back to manufacturer when brand is absent
+            mfr_score  = fuzz.WRatio(new_mfr, existing_mfr) / 100
+            name_score = fuzz.WRatio(new_name, existing_name) / 100
+            score = mfr_score * 0.2 + name_score * 0.6
+        else:
+            # Only name available — require very high name similarity
+            name_score = fuzz.WRatio(new_name, existing_name) / 100
+            score = name_score * 0.8
+
+        # Weight bonus: same weight pushes score up, different weight pulls it down
+        if new_weight and existing_weight:
+            if new_weight == existing_weight:
+                score += 0.10
+            else:
+                score -= 0.15
+
+        score = max(0.0, min(1.0, score))
+
+        if score >= similarity_threshold:
+            reasons = []
+            if new_brand and existing_brand:
+                reasons.append(f"brand ({fuzz.WRatio(new_brand, existing_brand):.0f}%)")
+            if new_name and existing_name:
+                reasons.append(f"name ({fuzz.WRatio(new_name, existing_name):.0f}%)")
+            if new_weight and existing_weight and new_weight == existing_weight:
+                reasons.append("weight match")
+            reason_str = "Similar " + " + ".join(reasons) if reasons else "High similarity"
+            duplicates.append({
+                **existing,
+                "match_reason": f"{reason_str} · score {score:.0%}",
+                "match_score": round(score, 3),
+            })
+
+    # Return the closest match first
+    duplicates.sort(key=lambda d: d.get("match_score", 0), reverse=True)
     return duplicates

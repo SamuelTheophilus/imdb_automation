@@ -8,7 +8,7 @@ from nicegui import app, ui
 # Importing this module registers the /login and /signup pages with NiceGUI.
 import frontend.auth_pages  # noqa: F401
 from backend.db import delete_batch_job, init_db, list_batch_jobs, list_extraction_versions, list_user_extractions
-from frontend.state import db_record_to_row, set_batch_jobs_refresh
+from frontend.state import db_record_to_row, set_batch_jobs_refresh, switch_to_batch_view
 from backend.normalizer import load_canonical_brands
 from frontend.auth_pages import require_user
 from frontend.components import (
@@ -149,6 +149,11 @@ def _render_batch_jobs_section(user_id: int) -> None:
                                 ui.label(f"· {n} product{'s' if n != 1 else ''} extracted").style(
                                     "color:#64748b; font-size:12px; font-family:Inter,sans-serif"
                                 )
+                                if n:
+                                    ui.label("· View results →").style(
+                                        "color:#818cf8; font-size:12px; font-family:Inter,sans-serif;"
+                                        "cursor:pointer; text-decoration:underline; text-underline-offset:2px"
+                                    ).on("click", lambda: switch_to_batch_view())
                                 skipped = job.get("skipped_count") or 0
                                 if skipped:
                                     names = __import__("json").loads(job.get("skipped_names_json") or "[]")

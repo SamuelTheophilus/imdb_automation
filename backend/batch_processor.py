@@ -312,6 +312,8 @@ async def _process_completed_job(client: AsyncAnthropic, job: dict) -> None:
             user_id=user_id,
             original_filename=f"[Batch #{job_id}] {Path(result.image_path).name}",
             result=result,
+            source="batch",
+            batch_job_id=job_id,
         )
 
     result_count = len(results)
