@@ -35,16 +35,16 @@ VLM extraction  ←── Claude Sonnet 4.6 (batch of up to 8 images per call)
 Field aggregation  ←── majority vote across image faces
         │
         ▼
-Barcode decoding  ←── pyzbar → zxing-cpp → CLAHE+adaptive threshold (3-pass)
+Barcode decoding  ←── pyzbar → zxing-cpp → CLAHE+adaptive threshold (5-pass)
         │
         ▼
 Normalisation  ←── country corrections, weight conversion, fuzzy brand matching
         │
         ▼
-Duplicate detection  ←── barcode + fuzzy brand/name matching
+Duplicate detection  ←── exact barcode · brand + name + weight composite scoring
         │
         ▼
-Editable UI review → CSV / Excel export
+Editable UI review → CSV / Excel export (predictions.csv / predictions.xlsx)
 ```
 
 ## Extracted Fields
@@ -156,14 +156,16 @@ Set these under **Settings → Variables and secrets** on your HF Space:
 
    **Quick Upload** (up to 20 images) — images are processed immediately. Multiple angles of the same product are grouped automatically by the dataset label on the edge of the packaging. The grid updates when extraction is complete.
 
-   **Bulk Batch** (unlimited images) — drop a large folder of images, enter a notification email, and click **Start**. The job is submitted to the Anthropic Batch API and processed asynchronously — you will receive an email when it is done. Results appear in the grid on your next login.
+   **Bulk Batch** (unlimited images) — drop a large folder of images, enter a notification email, and click **Start**. The job is submitted to the Anthropic Batch API and processed asynchronously — you will receive an email when it is done. Results appear in the grid automatically when the job completes (polling every 2 minutes). The batch card shows how many products were extracted and how many images were skipped (no product detected).
 
-3. Review row confidence:
+3. Review row confidence in the grid:
    - **Green** — high confidence, likely correct
    - **Yellow** — one or more fields need review
-   - **Red** — possible duplicate
-4. Click **Review** to open the side drawer: view the image carousel and edit any field.
-5. Export CSV or Excel from the header.
+   - **Red (Duplicate)** — possible duplicate of an existing entry; the status cell shows which product it matched and why (e.g. `of: MOK Fine Soap Rose · Similar brand (100%) + name (100%) · score 90%`). The Review drawer also shows a duplicate banner with the full match detail.
+   - **Red (Extraction failed)** — no product was detected; a dialog lets you keep or discard the image
+4. Use the **All / Quick Upload / Batch** toggle above the grid to filter results by source. Export always includes everything regardless of the active filter.
+5. Click **Review** to open the side drawer: view the image carousel, edit any field, and mark a row OK if it has been verified.
+6. Export as `predictions.csv` or `predictions.xlsx` from the header.
 
 ---
 
@@ -211,7 +213,7 @@ backend/
   extractor.py          VLM calls, batching, field aggregation, backend routing
   batch_processor.py    async bulk processing via Anthropic Batch API
   barcode.py            5-pass barcode extraction (pyzbar, zxing-cpp, CLAHE, rotation, ROI)
-  normalizer.py         country corrections, weight conversion, barcode cleaning, fuzzy matching
+  normalizer.py         country corrections, weight conversion, barcode cleaning, composite duplicate scoring
   email_service.py      password reset and batch completion email notifications
   db.py                 SQLite persistence, edit version history, batch job tracking
   schema.py             Pydantic models with per-field confidence scores
@@ -224,7 +226,7 @@ core/emails/
   batch_complete.j2     batch job completion email template
 frontend/
   app.py              NiceGUI entry point and page registration
-  components.py       grid, review drawer, carousel, upload zone, bulk batch tab
+  components.py       grid, review drawer, carousel, upload zone, bulk batch tab, source filter toggle
   auth_pages.py       login, signup, password reset pages
   handlers.py         upload, export, edit, and delete handlers
   state.py            shared state, row mapping, export formatting
