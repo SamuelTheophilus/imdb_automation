@@ -186,24 +186,6 @@ The pipeline uses **Claude Sonnet 4.6** (`claude-sonnet-4-6`) via the Anthropic 
 
 See `docs/model_selection.md` for the full model selection writeup and `docs/extraction_improvements.md` for all accuracy improvements.
 
----
-
-## Docker (self-hosted)
-
-```bash
-docker build -t imdb-autofill .
-docker run -p 7860:7860 \
-  -e VLM_BACKEND=anthropic \
-  -e ANTHROPIC_API_KEY=sk-ant-... \
-  -e GMAIL_USER=you@gmail.com \
-  -e GMAIL_APP_PASSWORD="xxxx xxxx xxxx xxxx" \
-  -e STORAGE_SECRET=some-random-string \
-  imdb-autofill
-```
-
-Open [http://localhost:7860](http://localhost:7860).
-
----
 
 ## Project Structure
 
