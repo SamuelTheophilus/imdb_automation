@@ -488,6 +488,7 @@ async def _run_video_batch(job: dict, video_paths: list[Path], model_display_nam
             result=result,
             source="video",
             batch_job_id=job_id,
+            video_path=str(video_path),
         )
 
     update_batch_job_status(

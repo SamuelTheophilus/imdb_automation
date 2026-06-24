@@ -224,6 +224,7 @@ def db_record_to_row(record: dict, idx: int) -> dict:
         "_dupe_of":    dupe_label,
         "_cost_usd":   record.get("cost_usd") or 0.0,
         "_model_used": record.get("model_used") or "",
+        "video_path":  record.get("video_path") or "",
     }
     for key, _ in FIELDS:
         row[key] = record.get(key) or ""

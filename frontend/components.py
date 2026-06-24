@@ -484,6 +484,53 @@ def open_review_drawer(row: dict):
         except Exception as exc:
             print(f"[components] carousel build error: {exc}")
 
+        # ── Video button — opens a modal player for video-sourced rows ──────────
+        video_path_raw = row.get("video_path") or ""
+        if video_path_raw:
+            video_url = (
+                image_to_url(video_path_raw)
+                if not video_path_raw.startswith("/")
+                else video_path_raw
+            )
+            if video_url:
+                with review_carousel_container:
+                    with ui.row().classes("w-full px-4 py-3").style(
+                        "border-top:1px solid rgba(255,255,255,0.05); background:#060a12;"
+                    ):
+                        def _open_video_modal(url=video_url):
+                            with ui.dialog() as dlg, ui.card().style(
+                                "background:#0d1117; border:1px solid rgba(255,255,255,0.08);"
+                                "border-radius:14px; padding:0; overflow:hidden; min-width:520px;"
+                            ):
+                                with ui.row().classes("w-full items-center justify-between px-4 py-3").style(
+                                    "border-bottom:1px solid rgba(255,255,255,0.06);"
+                                ):
+                                    ui.label("Source video").style(
+                                        "font-size:13px; font-weight:600; color:#e2e8f0;"
+                                        "font-family:Inter,sans-serif;"
+                                    )
+                                    ui.button(icon="close", on_click=dlg.close).props(
+                                        "flat round dense"
+                                    ).style("color:#64748b;")
+                                ui.html(
+                                    f'<div style="display:flex; justify-content:center;'
+                                    f' align-items:center; background:#000; padding:12px;">'
+                                    f'<video controls autoplay preload="auto"'
+                                    f' style="max-width:100%; max-height:420px;">'
+                                    f'<source src="{url}">'
+                                    f'</video>'
+                                    f'</div>'
+                                )
+                            dlg.open()
+
+                        ui.button(
+                            "View video", icon="play_circle_outline",
+                            on_click=_open_video_modal,
+                        ).props("flat dense").style(
+                            "font-size:12px; font-weight:500; color:#818cf8;"
+                            "font-family:Inter,sans-serif; padding:0;"
+                        )
+
     for key, _ in FIELDS:
         review_inputs[key].value = row.get(key, "")
 
@@ -877,10 +924,12 @@ def _render_multiview_tab(user: dict | None) -> None:
             original_filename=original_name,
             result=result,
             source="video",
+            video_path=str(video_path),
         )
         row = result_to_row(result, len(row_data))
         row["db_id"] = extraction_id
         row["_source"] = "video"
+        row["video_path"] = image_to_url(str(video_path))
         row_data.append(row)
 
         grid = get_grid()
