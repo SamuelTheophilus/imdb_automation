@@ -11,6 +11,7 @@ from backend.pipeline import PipelineResult
 # load and kept in sync with the grid via direct mutation.
 
 _grids_by_client: dict[str, object] = {}
+_model_by_client: dict[str, str] = {}
 
 
 def set_grid(grid) -> None:
@@ -46,6 +47,19 @@ def set_grid_source_filter(fn) -> None:
     client = ui.context.client
     _grid_filter_by_client[client.id] = fn
     client.on_delete(lambda c: _grid_filter_by_client.pop(c.id, None))
+
+
+def get_client_model() -> str:
+    """Return the model display name selected by this client, or the env default."""
+    from backend.extractor import get_default_display_name
+    client = ui.context.client
+    return _model_by_client.get(client.id) or get_default_display_name()
+
+
+def set_client_model(display_name: str) -> None:
+    client = ui.context.client
+    _model_by_client[client.id] = display_name
+    client.on_delete(lambda c: _model_by_client.pop(c.id, None))
 
 
 def switch_to_batch_view() -> None:
@@ -164,6 +178,8 @@ def result_to_row(result: PipelineResult, idx: int) -> dict:
         "_source":     getattr(result, "source", "quick"),
         "_batch_id":   getattr(result, "batch_job_id", "") or "",
         "_dupe_of":    dupe_label,
+        "_cost_usd":   getattr(result, "cost_usd", 0.0) or 0.0,
+        "_model_used": getattr(result, "model_used", "") or "",
     }
 
     for key, _ in FIELDS:
@@ -206,6 +222,8 @@ def db_record_to_row(record: dict, idx: int) -> dict:
         "_source":     record.get("source") or "quick",
         "_batch_id":   str(record.get("batch_job_id") or ""),
         "_dupe_of":    dupe_label,
+        "_cost_usd":   record.get("cost_usd") or 0.0,
+        "_model_used": record.get("model_used") or "",
     }
     for key, _ in FIELDS:
         row[key] = record.get(key) or ""
@@ -380,6 +398,21 @@ def build_column_defs() -> list[dict]:
                     + 'font-size:10px;color:#475569;font-family:DM Mono,monospace;'
                     + 'background:rgba(99,102,241,0.08);border-radius:4px;padding:2px 6px">'
                     + '#' + p.value + '</span>';
+            }""",
+        },
+        {
+            "headerName": "Cost",
+            "field": "_cost_usd",
+            "width": 80, "minWidth": 80, "maxWidth": 80,
+            "resizable": False, "editable": False, "sortable": True, "filter": False,
+            "pinned": "left",
+            "headerTooltip": "Estimated API cost for this extraction",
+            ":cellRenderer": """function(p) {
+                var v = parseFloat(p.value) || 0;
+                if (v === 0) return '<span style="color:#475569;font-size:10px;font-family:DM Mono,monospace">--</span>';
+                var s = v < 0.001 ? v.toFixed(6) : v.toFixed(4);
+                return '<span title="Model: ' + (p.data._model_used || 'unknown') + '" style="'
+                    + 'font-size:10px;color:#10b981;font-family:DM Mono,monospace">$' + s + '</span>';
             }""",
         },
         {

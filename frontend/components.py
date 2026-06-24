@@ -3,6 +3,7 @@ from pathlib import Path
 from nicegui import events, ui
 
 from backend.db import update_extraction_image_paths, update_extraction_status
+from backend.extractor import MODEL_OPTIONS
 from frontend.auth_pages import current_user, logout, render_change_password_dialog
 from frontend.tour import TOUR_JS, TOUR_SAMPLE_ROW
 from frontend.handlers import (
@@ -16,7 +17,7 @@ from frontend.handlers import (
     stage_bulk_files,
 )
 
-from frontend.state import FIELDS, build_column_defs, get_grid, image_to_url, row_data, set_grid, set_grid_source_filter
+from frontend.state import FIELDS, build_column_defs, get_client_model, get_grid, image_to_url, row_data, set_client_model, set_grid, set_grid_source_filter
 
 review_drawer = None
 review_carousel_container = None
@@ -613,11 +614,69 @@ def render_upload_zone():
     user = current_user()
 
     with ui.column().classes("w-full gap-0"):
-        with ui.tabs().props(
-            "align=left dense indicator-color=indigo-4 active-color=indigo-4"
-        ).style("border-bottom:1px solid rgba(240,225,205,0.07)") as tabs:
-            ui.tab("Quick Upload", icon="upload_file").props("no-caps")
-            ui.tab("Bulk Batch", icon="dynamic_feed").props("no-caps").classes("bulk-batch-tab")
+        with ui.row().classes("w-full items-center justify-between").style(
+            "border-bottom:1px solid rgba(240,225,205,0.07)"
+        ):
+            with ui.tabs().props(
+                "align=left dense indicator-color=indigo-4 active-color=indigo-4"
+            ).style("border-bottom:none") as tabs:
+                ui.tab("Quick Upload", icon="upload_file").props("no-caps")
+                ui.tab("Bulk Batch", icon="dynamic_feed").props("no-caps").classes("bulk-batch-tab")
+
+            with ui.row().classes("items-center gap-2 pr-1"):
+                ui.label("Model:").style("font-size:11px; color:#64748b")
+                ui.select(
+                    list(MODEL_OPTIONS.keys()),
+                    value=get_client_model(),
+                    on_change=lambda e: set_client_model(e.value),
+                ).props("dense dark outlined").style(
+                    "font-size:11px; min-width:160px"
+                )
+                with ui.element("div").style("position:relative"):
+                    info_btn = ui.icon("info_outline", size="1rem").style(
+                        "color:#475569; cursor:pointer; margin-top:2px"
+                    )
+                    with ui.menu().props("anchor='bottom right' self='top right' auto-close").classes(
+                        "shadow-xl"
+                    ).style(
+                        "background:#1e1c19; border:1px solid rgba(240,225,205,0.09);"
+                        "border-radius:10px; padding:14px 16px; width:340px"
+                    ) as pricing_menu:
+                        ui.html("""
+                            <p style="font-size:12px;font-weight:700;color:#f0ebe5;
+                               font-family:Inter,sans-serif;margin:0 0 10px 0">
+                               Estimated cost per image
+                            </p>
+                            <table style="font-size:11px;color:#94a3b8;font-family:DM Mono,monospace;
+                                          border-collapse:collapse;width:100%;white-space:nowrap">
+                              <tr style="color:#64748b;font-size:10px">
+                                <th style="text-align:left;padding-bottom:6px;padding-right:20px">Model</th>
+                                <th style="text-align:right;padding-bottom:6px;padding-right:16px">Quick Upload</th>
+                                <th style="text-align:right;padding-bottom:6px">Bulk Batch</th>
+                              </tr>
+                              <tr>
+                                <td style="padding:4px 20px 4px 0;color:#c7d2fe">Claude Sonnet 4.6</td>
+                                <td style="text-align:right;padding-right:16px">~$0.009</td>
+                                <td style="text-align:right;color:#10b981">~$0.0045</td>
+                              </tr>
+                              <tr>
+                                <td style="padding:4px 20px 4px 0;color:#c7d2fe">GPT-5.5</td>
+                                <td style="text-align:right;padding-right:16px">~$0.017</td>
+                                <td style="text-align:right;color:#10b981">~$0.0085</td>
+                              </tr>
+                              <tr>
+                                <td style="padding:4px 20px 4px 0;color:#c7d2fe">Gemini 2.5 Flash</td>
+                                <td style="text-align:right;padding-right:16px">~$0.0012</td>
+                                <td style="text-align:right;color:#10b981">~$0.0006</td>
+                              </tr>
+                            </table>
+                            <p style="font-size:10px;color:#475569;font-family:Inter,sans-serif;
+                               margin:10px 0 0 0;line-height:1.6;border-top:1px solid rgba(240,225,205,0.07);padding-top:8px">
+                              Based on ~1,560 input tokens and ~300 output tokens per image.
+                              Bulk Batch uses provider batch APIs at 50% off standard rates.
+                            </p>
+                        """)
+                    info_btn.on("click", pricing_menu.open)
 
         with ui.tab_panels(tabs, value="Quick Upload").classes("w-full p-0"):
             with ui.tab_panel("Quick Upload").classes("p-0 pt-3"):
@@ -705,7 +764,7 @@ def _render_bulk_tab(user: dict | None) -> None:
         n = len(staged_paths)
         if n == 0:
             return
-        email = email_input.value.strip()
+        email = (email_input.value or "").strip()
         if not email:
             ui.notify(
                 "Please enter an email address so we can notify you when results are ready.",

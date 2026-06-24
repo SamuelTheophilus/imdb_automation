@@ -16,7 +16,18 @@ from PIL import Image, ImageEnhance
 from backend.barcode import decode_barcode, ean_checksum_valid
 from backend.image_aggregation import group_by_tag_similarity
 from backend.schema import IMDBRecordWithConfidence
-from backend.utils import VLMCallParams, VLMImageData, vlm_call_w_anthropic, vlm_call_w_ollama, vlm_call_w_openai, vlm_call_w_gemini
+from backend.utils import (
+    ANTHROPIC_MODEL,
+    GEMINI_MODEL,
+    MODEL as OLLAMA_MODEL,
+    OPENAI_MODEL,
+    VLMCallParams,
+    VLMImageData,
+    vlm_call_w_anthropic,
+    vlm_call_w_gemini,
+    vlm_call_w_ollama,
+    vlm_call_w_openai,
+)
 
 # ── Prompt templates ────────────────────────────────────────────────────────
 jinja_templates_folder = f"{Path(__file__).parent.parent}/core/prompts"
@@ -40,12 +51,13 @@ def _resolve_backend() -> str:
         return explicit
     return "ollama" if os.getenv("USE_LOCAL_MODEL", "YES").strip().upper() == "YES" else "openai"
 
-_VLM_BACKEND: str = _resolve_backend()
+_active_backend: str = _resolve_backend()
+_active_model_id: str = ""  # set after MODEL_OPTIONS is defined below
 
 # Ollama supports only one image per request. Cloud backends (OpenAI, Gemini)
 # accept multiple images per call — batching reduces round-trips and lets the
 # model cross-reference all faces of a product in one pass.
-_BATCH_SIZE = 1 if _VLM_BACKEND == "ollama" else int(os.getenv("VLM_BATCH_SIZE", "8"))
+_BATCH_SIZE = 1 if _active_backend == "ollama" else int(os.getenv("VLM_BATCH_SIZE", "8"))
 
 # Semaphore limits simultaneous requests. For Ollama this matches
 # OLLAMA_NUM_PARALLEL; for cloud APIs it caps parallel calls.
@@ -60,13 +72,67 @@ def _get_semaphore() -> asyncio.Semaphore:
     return _semaphore
 
 
-async def _vlm_call(params: VLMCallParams):
-    """Route the VLM call to the configured backend."""
-    if _VLM_BACKEND == "anthropic":
+# ── Model selection & pricing ─────────────────────────────────────────────────
+
+# Display name -> (backend, model_id). Model IDs come from env vars so the
+# operator can swap models without changing code.
+# Batch variants use the same model but routed through the provider's Batch API
+# (async, lower cost). Marked here for display; batch routing is handled by
+# the bulk batch processor, not the quick upload pipeline.
+MODEL_OPTIONS: dict[str, tuple[str, str]] = {
+    "Claude Sonnet 4.6 (Recommended)": ("anthropic", ANTHROPIC_MODEL),
+    "GPT-5.5":                          ("openai",    OPENAI_MODEL),
+    "Gemini 2.5 Flash":                 ("gemini",    GEMINI_MODEL),
+}
+
+# Cost per 1 million tokens (input_rate, output_rate) in USD.
+PRICING_TABLE: dict[str, tuple[float, float]] = {
+    "claude-sonnet-4-6":          (3.00,  15.00),
+    "claude-haiku-4-5-20251001":  (0.80,   4.00),
+    OPENAI_MODEL:                 (5.00,  30.00),   # GPT-5.5
+    GEMINI_MODEL:                 (0.30,   2.50),   # Gemini 2.5 Flash
+}
+
+
+def _default_model_for(backend: str) -> str:
+    if backend == "anthropic":
+        return ANTHROPIC_MODEL
+    if backend == "openai":
+        return OPENAI_MODEL
+    if backend == "gemini":
+        return GEMINI_MODEL
+    return OLLAMA_MODEL
+
+
+def get_default_display_name() -> str:
+    """Return the display name matching the env-var-configured backend."""
+    for name, (backend, model_id) in MODEL_OPTIONS.items():
+        if backend == _active_backend and model_id == _active_model_id:
+            return name
+    return next(iter(MODEL_OPTIONS))
+
+
+def calculate_cost(input_tokens: int, output_tokens: int, model_id: str) -> float:
+    """Return the USD cost for the given token counts and model."""
+    rates = PRICING_TABLE.get(model_id)
+    if not rates:
+        return 0.0
+    in_rate, out_rate = rates
+    return (input_tokens * in_rate + output_tokens * out_rate) / 1_000_000
+
+
+# Initialise _active_model_id after MODEL_OPTIONS exists.
+_active_model_id = _default_model_for(_active_backend)
+
+
+async def _vlm_call(params: VLMCallParams, backend: str, model_id: str):
+    """Route the VLM call to the specified backend and model."""
+    params = params.model_copy(update={"model_override": model_id or None})
+    if backend == "anthropic":
         return await vlm_call_w_anthropic(params)
-    if _VLM_BACKEND == "gemini":
+    if backend == "gemini":
         return await vlm_call_w_gemini(params)
-    if _VLM_BACKEND == "openai":
+    if backend == "openai":
         return await vlm_call_w_openai(params)
     return await vlm_call_w_ollama(params)
 
@@ -446,15 +512,15 @@ def _record_from_group(
 
 # ── Batch extraction ─────────────────────────────────────────────────────────
 
-async def _extract_batch(batch: list[Path]) -> list[list[dict]]:
-    """Send a batch of images to the VLM and return one item-list per image.
+async def _extract_batch(
+    batch: list[Path],
+    backend: str,
+    model_id: str,
+) -> tuple[list[list[dict]], int, int]:
+    """Send a batch of images to the VLM and return items plus token counts.
 
-    Items are matched to images positionally (first item → first image). If the
-    model returns a different number of items than images the attempt is retried.
-    All attempts exhausted → returns empty lists so downstream still produces a
-    record flagged for review.
-
-    The semaphore limits concurrent Ollama calls to OLLAMA_CONCURRENCY.
+    Returns (per_image_items, input_tokens, output_tokens). Items are matched to
+    images positionally. Retries up to _MAX_ATTEMPTS on failure.
     """
     encoded = [_encode_image(p) for p in batch]
     names = ", ".join(p.name for p in batch)
@@ -473,7 +539,9 @@ async def _extract_batch(batch: list[Path]) -> list[list[dict]]:
                         ],
                         description=f"[BATCH {len(batch)}] {names} (attempt {attempt}/{_MAX_ATTEMPTS})",
                         format_schema=EXTRACTION_SCHEMA,
-                    )
+                    ),
+                    backend=backend,
+                    model_id=model_id,
                 )
 
             choice = response.choices[0]
@@ -498,7 +566,7 @@ async def _extract_batch(batch: list[Path]) -> list[list[dict]]:
                 item["image_path"] = str(image_path)
                 item["tag_text"] = item.get("tag_text") or ""
                 result.append([item])
-            return result
+            return result, response.input_tokens, response.output_tokens
 
         except Exception as e:
             last_error = str(e)
@@ -508,25 +576,36 @@ async def _extract_batch(batch: list[Path]) -> list[list[dict]]:
         f"[extractor] all {_MAX_ATTEMPTS} attempts exhausted for [{names}] "
         f"(last error: {last_error}) — images will be empty and flagged for review"
     )
-    return [[] for _ in batch]
+    return [[] for _ in batch], 0, 0
 
 
 # ── Entry point ──────────────────────────────────────────────────────────────
 
 async def extract_information_from_images(
     image_paths: list[str] | list[Path],
-) -> list[tuple[IMDBRecordWithConfidence, list[str]]]:
+    model_display_name: str | None = None,
+) -> list[tuple[IMDBRecordWithConfidence, list[str], float, str]]:
     """Run extraction on a list of images and return one record per product group.
 
     Flow:
     1. Split images into batches of _BATCH_SIZE.
-    2. Fire all batches concurrently (semaphore limits actual Ollama parallelism).
+    2. Fire all batches concurrently (semaphore limits actual parallelism).
     3. Flatten per-batch results into a list of item dicts.
     4. Group item dicts by tag/brand similarity → one group = one product.
     5. Aggregate each group into one IMDBRecordWithConfidence.
 
-    Returns a list of (record, image_paths_for_group) tuples, one per product.
+    model_display_name selects from MODEL_OPTIONS; falls back to the env-var
+    default when omitted or unrecognised.
+
+    Returns a list of (record, image_paths, cost_usd, model_used) tuples.
+    Cost is distributed proportionally across groups by image count.
     """
+    # Resolve backend and model_id from the display name, falling back to defaults.
+    if model_display_name and model_display_name in MODEL_OPTIONS:
+        backend, model_id = MODEL_OPTIONS[model_display_name]
+    else:
+        backend, model_id = _active_backend, _active_model_id
+
     image_paths = [Path(p) for p in image_paths]
     known_paths = {str(path): str(path) for path in image_paths}
 
@@ -536,19 +615,34 @@ async def extract_information_from_images(
     ]
     print(
         f"[extractor] {len(image_paths)} images → "
-        f"{len(batches)} batches of ≤{_BATCH_SIZE} (concurrency={_CONCURRENCY})"
+        f"{len(batches)} batches of ≤{_BATCH_SIZE} (concurrency={_CONCURRENCY}) "
+        f"backend={backend} model={model_id}"
     )
 
-    batch_tasks = [_extract_batch(b) for b in batches]
+    batch_tasks = [_extract_batch(b, backend, model_id) for b in batches]
     batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
 
+    total_input_tokens = 0
+    total_output_tokens = 0
     valid_items: list[dict] = []
     for batch, batch_result in zip(batches, batch_results):
         if isinstance(batch_result, Exception):
             print(f"[extractor] ERROR on batch {[p.name for p in batch]}: {batch_result}")
             continue
-        for per_image_items in batch_result:
+        items, in_tok, out_tok = batch_result
+        total_input_tokens += in_tok
+        total_output_tokens += out_tok
+        for per_image_items in items:
             valid_items.extend(per_image_items)
+
+    total_cost = calculate_cost(total_input_tokens, total_output_tokens, model_id)
+    model_used = model_id
+    total_images = len(image_paths) or 1
+
+    print(
+        f"[extractor] tokens: input={total_input_tokens} output={total_output_tokens} "
+        f"cost=${total_cost:.6f} model={model_used}"
+    )
 
     # Group extracted items by product and build one record per group
     grouped_items = group_by_tag_similarity(valid_items)
@@ -564,6 +658,7 @@ async def extract_information_from_images(
     for group in grouped_items:
         group_paths = [item["image_path"] for item in group]
         record = _record_from_group(group, group_paths)
-        extracted_products.append((record, group_paths))
+        group_cost = total_cost * (len(group_paths) / total_images)
+        extracted_products.append((record, group_paths, group_cost, model_used))
 
     return extracted_products

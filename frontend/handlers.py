@@ -10,7 +10,7 @@ from nicegui import events, ui
 from backend.db import create_extraction, delete_extraction, list_user_extractions, update_extraction_fields
 from backend.pipeline import PipelineResult, run_pipeline
 from frontend.auth_pages import current_user
-from frontend.state import FIELDS, failed_row, get_grid, result_to_row, row_data, row_to_export_dict
+from frontend.state import FIELDS, failed_row, get_client_model, get_grid, result_to_row, row_data, row_to_export_dict
 
 QUICK_UPLOAD_LIMIT = 20
 BULK_IMAGE_EXTS = frozenset({".jpg", ".jpeg", ".png", ".webp"})
@@ -60,7 +60,11 @@ async def handle_batch_upload(e: events.MultiUploadEventArguments):
 
     try:
         existing_records = list_user_extractions(user["id"])
-        results: list[PipelineResult] = await run_pipeline(saved_paths, existing_records=existing_records)
+        results: list[PipelineResult] = await run_pipeline(
+            saved_paths,
+            existing_records=existing_records,
+            model_display_name=get_client_model(),
+        )
     except Exception as exc:
         if getattr(client, "_deleted", False):
             return
@@ -262,8 +266,8 @@ async def handle_bulk_start(
     notify_email: str,
     user: dict | None,
 ) -> None:
-    """Submit staged images to the Anthropic Batch API and store the job."""
+    """Submit staged images to the selected provider's Batch API and store the job."""
     if not user:
         raise ValueError("You must be logged in to submit a batch job.")
     from backend.batch_processor import submit_bulk_batch
-    await submit_bulk_batch(paths, notify_email, user["id"])
+    await submit_bulk_batch(paths, notify_email, user["id"], model_display_name=get_client_model())

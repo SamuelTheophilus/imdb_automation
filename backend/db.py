@@ -48,19 +48,32 @@ def _migrate_extractions(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_users(conn: sqlite3.Connection) -> None:
-    """Add the email column to users if it doesn't exist yet."""
+    """Add columns to users that were introduced after the initial schema."""
     existing = {row[1] for row in conn.execute("PRAGMA table_info(users)")}
     if "email" not in existing:
         conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
+    if "tour_shown" not in existing:
+        conn.execute("ALTER TABLE users ADD COLUMN tour_shown INTEGER DEFAULT 0")
 
 
 def _migrate_batch_jobs(conn: sqlite3.Connection) -> None:
-    """Add skipped_count and skipped_names_json columns to batch_jobs if missing."""
+    """Add columns to batch_jobs introduced after the initial schema."""
     existing = {row[1] for row in conn.execute("PRAGMA table_info(batch_jobs)")}
     if "skipped_count" not in existing:
         conn.execute("ALTER TABLE batch_jobs ADD COLUMN skipped_count INTEGER")
     if "skipped_names_json" not in existing:
         conn.execute("ALTER TABLE batch_jobs ADD COLUMN skipped_names_json TEXT")
+    if "provider" not in existing:
+        conn.execute("ALTER TABLE batch_jobs ADD COLUMN provider TEXT DEFAULT 'anthropic'")
+
+
+def _migrate_extraction_costs(conn: sqlite3.Connection) -> None:
+    """Add cost_usd and model_used columns to extractions if missing."""
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(extractions)")}
+    if "cost_usd" not in existing:
+        conn.execute("ALTER TABLE extractions ADD COLUMN cost_usd REAL")
+    if "model_used" not in existing:
+        conn.execute("ALTER TABLE extractions ADD COLUMN model_used TEXT")
 
 
 def _utc_now() -> str:
@@ -158,6 +171,7 @@ def init_db() -> None:
         _migrate_users(conn)
         _migrate_extractions(conn)
         _migrate_batch_jobs(conn)
+        _migrate_extraction_costs(conn)
         _seed_missing_versions(conn)
 
 
@@ -220,6 +234,15 @@ def update_user_password(user_id: int, password_hash: str) -> None:
         conn.execute(
             "UPDATE users SET password_hash = ? WHERE id = ?",
             (password_hash, user_id),
+        )
+
+
+def mark_tour_shown(user_id: int) -> None:
+    """Persist that this user has completed the onboarding tour."""
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE users SET tour_shown = 1 WHERE id = ?",
+            (user_id,),
         )
 
 
@@ -331,7 +354,8 @@ def create_extraction(
                 barcode, category_type, segment_type, manufacturer, brand,
                 product_name, weight, unit, packaging_type, country_of_origin,
                 promotional_messages, variant, fragrance_flavor, addons, tagline,
-                image_paths_json, source, batch_job_id
+                image_paths_json, source, batch_job_id,
+                cost_usd, model_used
             )
             VALUES (
                 ?, ?, ?, ?,
@@ -340,7 +364,8 @@ def create_extraction(
                 ?, ?, ?, ?, ?,
                 ?, ?, ?, ?, ?,
                 ?, ?, ?, ?, ?,
-                ?, ?, ?
+                ?, ?, ?,
+                ?, ?
             )
             """,
             (
@@ -376,6 +401,8 @@ def create_extraction(
                 json.dumps(result.image_paths),
                 source,
                 batch_job_id,
+                result.cost_usd,
+                result.model_used,
             ),
         )
         extraction_id = int(cursor.lastrowid)
@@ -498,6 +525,7 @@ def create_batch_job(
     image_paths: list,
     request_map: dict,
     notify_email: str | None = None,
+    provider: str = "anthropic",
 ) -> int:
     """Persist a new batch job and return its id."""
     with get_connection() as conn:
@@ -506,8 +534,8 @@ def create_batch_job(
             INSERT INTO batch_jobs (
                 user_id, anthropic_batch_id, status,
                 image_paths_json, request_map_json,
-                notify_email, submitted_at
-            ) VALUES (?, ?, 'pending', ?, ?, ?, ?)
+                notify_email, submitted_at, provider
+            ) VALUES (?, ?, 'pending', ?, ?, ?, ?, ?)
             """,
             (
                 user_id,
@@ -516,6 +544,7 @@ def create_batch_job(
                 json.dumps(request_map),
                 notify_email or None,
                 _utc_now(),
+                provider,
             ),
         )
         return int(cursor.lastrowid)

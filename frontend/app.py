@@ -7,7 +7,7 @@ from nicegui import app, ui
 
 # Importing this module registers the /login and /signup pages with NiceGUI.
 import frontend.auth_pages  # noqa: F401
-from backend.db import delete_batch_job, init_db, list_batch_jobs, list_extraction_versions, list_user_extractions
+from backend.db import delete_batch_job, init_db, list_batch_jobs, list_extraction_versions, list_user_extractions, mark_tour_shown
 from frontend.state import db_record_to_row, set_batch_jobs_refresh, switch_to_batch_view
 from backend.normalizer import load_canonical_brands
 from frontend.auth_pages import require_user
@@ -55,7 +55,7 @@ async def _batch_poll_loop() -> None:
             await poll_pending_jobs()
         except Exception as exc:
             log.error("[batch_poller] unhandled error in cycle #%d: %s", cycle, exc)
-        log.info("[batch_poller] cycle #%d done — next in 5 min", cycle)
+        log.info("[batch_poller] cycle #%d done — next in 2 min", cycle)
         await asyncio.sleep(120)
 
 
@@ -225,17 +225,17 @@ def main_page():
 
 
     # ── Tour ─────────────────────────────────────────────────────────────────
-    # Fire once for first-time users; the "?" header button lets anyone replay.
-    async def _maybe_tour():
-        tour_key = f"tour_shown_{user['id']}"
-        if app.storage.user.get(tour_key):
-            return
-        app.storage.user[tour_key] = True
-        client = ui.context.client  # capture before yielding context
-        await asyncio.sleep(1.2)  # let the page fully render first
-        _launch_tour(client)
+    # tour_shown is stored per-user in the database so it survives server
+    # restarts, logouts, and different browsers.
+    if not user.get("tour_shown"):
+        mark_tour_shown(user["id"])
 
-    ui.timer(0, _maybe_tour, once=True)
+        async def _launch_tour_delayed():
+            client = ui.context.client
+            await asyncio.sleep(1.2)
+            _launch_tour(client)
+
+        ui.timer(0, _launch_tour_delayed, once=True)
 
 
 @ui.page("/history")
