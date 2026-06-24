@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 
 from nicegui import events, ui
@@ -610,18 +611,57 @@ async def delete_from_review_drawer():
 # ── Upload zone ──────────────────────────────────────────────────────────────
 
 def render_upload_zone():
-    """Tabbed upload zone: Quick Upload (≤20 images) and Bulk Batch (unlimited)."""
+    """Two-level pill navigation upload zone.
+
+    Outer pills: Image | Video   (type of media)
+    Inner pills: Quick Upload | Batch   (processing mode)
+
+    All four combinations are supported:
+      Image / Quick Upload  -- up to 20 images, immediate.
+      Image / Batch         -- unlimited images, background job.
+      Video / Quick Upload  -- up to 5 videos, immediate.
+      Video / Batch         -- up to 50 videos, background job.
+
+    Uses custom pill controls instead of NiceGUI tabs so the visual hierarchy
+    matches the app's existing legend/filter pill design language.
+    """
     user = current_user()
 
+    # ── Pill styles -- match the legend filter pills in render_legend() ───────
+    _BASE = (
+        "font-family:Inter,sans-serif; cursor:pointer; transition:all 0.15s;"
+        "border:1px solid; border-radius:20px; user-select:none;"
+    )
+    # Outer pills are slightly larger -- they represent the primary choice.
+    _O_ON  = _BASE + (
+        "padding:5px 16px; font-size:12px; font-weight:600;"
+        "background:rgba(99,102,241,0.15); color:#a5b4fc;"
+        "border-color:rgba(99,102,241,0.35);"
+    )
+    _O_OFF = _BASE + (
+        "padding:5px 16px; font-size:12px; font-weight:500;"
+        "background:transparent; color:#475569; border-color:transparent;"
+    )
+    # Inner pills are smaller -- secondary choice inside the active outer.
+    _I_ON  = _BASE + (
+        "padding:4px 12px; font-size:11px; font-weight:500;"
+        "background:rgba(99,102,241,0.15); color:#a5b4fc;"
+        "border-color:rgba(99,102,241,0.35);"
+    )
+    _I_OFF = _BASE + (
+        "padding:4px 12px; font-size:11px; font-weight:500;"
+        "background:transparent; color:#334155; border-color:transparent;"
+    )
+
     with ui.column().classes("w-full gap-0"):
-        with ui.row().classes("w-full items-center justify-between").style(
+
+        # ── Header: outer pills on the left, model selector on the right ─────
+        with ui.row().classes("w-full items-center justify-between pb-2").style(
             "border-bottom:1px solid rgba(240,225,205,0.07)"
         ):
-            with ui.tabs().props(
-                "align=left dense indicator-color=indigo-4 active-color=indigo-4"
-            ).style("border-bottom:none") as tabs:
-                ui.tab("Quick Upload", icon="upload_file").props("no-caps")
-                ui.tab("Bulk Batch", icon="dynamic_feed").props("no-caps").classes("bulk-batch-tab")
+            with ui.row().classes("items-center gap-1"):
+                outer_img = ui.label("Image").style(_O_ON)
+                outer_vid = ui.label("Video").style(_O_OFF)
 
             with ui.row().classes("items-center gap-2 pr-1"):
                 ui.label("Model:").style("font-size:11px; color:#64748b")
@@ -629,16 +669,14 @@ def render_upload_zone():
                     list(MODEL_OPTIONS.keys()),
                     value=get_client_model(),
                     on_change=lambda e: set_client_model(e.value),
-                ).props("dense dark outlined").style(
-                    "font-size:11px; min-width:160px"
-                )
+                ).props("dense dark outlined").style("font-size:11px; min-width:160px")
                 with ui.element("div").style("position:relative"):
                     info_btn = ui.icon("info_outline", size="1rem").style(
                         "color:#475569; cursor:pointer; margin-top:2px"
                     )
-                    with ui.menu().props("anchor='bottom right' self='top right' auto-close").classes(
-                        "shadow-xl"
-                    ).style(
+                    with ui.menu().props(
+                        "anchor='bottom right' self='top right' auto-close"
+                    ).classes("shadow-xl").style(
                         "background:#1e1c19; border:1px solid rgba(240,225,205,0.09);"
                         "border-radius:10px; padding:14px 16px; width:340px"
                     ) as pricing_menu:
@@ -647,12 +685,13 @@ def render_upload_zone():
                                font-family:Inter,sans-serif;margin:0 0 10px 0">
                                Estimated cost per image
                             </p>
-                            <table style="font-size:11px;color:#94a3b8;font-family:DM Mono,monospace;
+                            <table style="font-size:11px;color:#94a3b8;
+                                          font-family:DM Mono,monospace;
                                           border-collapse:collapse;width:100%;white-space:nowrap">
                               <tr style="color:#64748b;font-size:10px">
                                 <th style="text-align:left;padding-bottom:6px;padding-right:20px">Model</th>
                                 <th style="text-align:right;padding-bottom:6px;padding-right:16px">Quick Upload</th>
-                                <th style="text-align:right;padding-bottom:6px">Bulk Batch</th>
+                                <th style="text-align:right;padding-bottom:6px">Batch</th>
                               </tr>
                               <tr>
                                 <td style="padding:4px 20px 4px 0;color:#c7d2fe">Claude Sonnet 4.6</td>
@@ -671,18 +710,89 @@ def render_upload_zone():
                               </tr>
                             </table>
                             <p style="font-size:10px;color:#475569;font-family:Inter,sans-serif;
-                               margin:10px 0 0 0;line-height:1.6;border-top:1px solid rgba(240,225,205,0.07);padding-top:8px">
+                               margin:10px 0 0 0;line-height:1.6;
+                               border-top:1px solid rgba(240,225,205,0.07);padding-top:8px">
                               Based on ~1,560 input tokens and ~300 output tokens per image.
-                              Bulk Batch uses provider batch APIs at 50% off standard rates.
+                              Batch uses provider batch APIs at 50% off standard rates.
                             </p>
                         """)
                     info_btn.on("click", pricing_menu.open)
 
-        with ui.tab_panels(tabs, value="Quick Upload").classes("w-full p-0"):
-            with ui.tab_panel("Quick Upload").classes("p-0 pt-3"):
+        # ── Image panel ───────────────────────────────────────────────────────
+        image_panel = ui.column().classes("w-full gap-0")
+        with image_panel:
+            # Inner pills
+            with ui.row().classes("items-center gap-1 pt-2 pb-1"):
+                img_quick_pill = ui.label("Quick Upload").style(_I_ON)
+                img_batch_pill = ui.label("Batch").style(_I_OFF).classes("bulk-batch-tab")
+
+            # Content panels -- only one visible at a time
+            img_quick_panel = ui.column().classes("w-full pt-2")
+            with img_quick_panel:
                 _render_quick_tab()
-            with ui.tab_panel("Bulk Batch").classes("p-0 pt-3"):
+
+            img_batch_panel = ui.column().classes("w-full pt-2")
+            img_batch_panel.set_visibility(False)
+            with img_batch_panel:
                 _render_bulk_tab(user)
+
+        # ── Video panel (hidden by default) ───────────────────────────────────
+        video_panel = ui.column().classes("w-full gap-0")
+        video_panel.set_visibility(False)
+        with video_panel:
+            # Inner pills
+            with ui.row().classes("items-center gap-1 pt-2 pb-1"):
+                vid_quick_pill = ui.label("Quick Upload").style(_I_ON)
+                vid_batch_pill = ui.label("Batch").style(_I_OFF)
+
+            # Content panels
+            vid_quick_panel = ui.column().classes("w-full pt-2")
+            with vid_quick_panel:
+                _render_multiview_tab(user)
+
+            vid_batch_panel = ui.column().classes("w-full pt-2")
+            vid_batch_panel.set_visibility(False)
+            with vid_batch_panel:
+                _render_video_batch_tab(user)
+
+        # ── Toggle callbacks (closures -- all UI elements are defined above) ──
+
+        def _show_image():
+            outer_img.style(_O_ON);  outer_vid.style(_O_OFF)
+            image_panel.set_visibility(True)
+            video_panel.set_visibility(False)
+
+        def _show_video():
+            outer_img.style(_O_OFF); outer_vid.style(_O_ON)
+            image_panel.set_visibility(False)
+            video_panel.set_visibility(True)
+
+        def _show_img_quick():
+            img_quick_pill.style(_I_ON);  img_batch_pill.style(_I_OFF)
+            img_quick_panel.set_visibility(True)
+            img_batch_panel.set_visibility(False)
+
+        def _show_img_batch():
+            img_quick_pill.style(_I_OFF); img_batch_pill.style(_I_ON)
+            img_quick_panel.set_visibility(False)
+            img_batch_panel.set_visibility(True)
+
+        def _show_vid_quick():
+            vid_quick_pill.style(_I_ON);  vid_batch_pill.style(_I_OFF)
+            vid_quick_panel.set_visibility(True)
+            vid_batch_panel.set_visibility(False)
+
+        def _show_vid_batch():
+            vid_quick_pill.style(_I_OFF); vid_batch_pill.style(_I_ON)
+            vid_quick_panel.set_visibility(False)
+            vid_batch_panel.set_visibility(True)
+
+        outer_img.on("click", _show_image)
+        outer_vid.on("click", _show_video)
+        img_quick_pill.on("click", _show_img_quick)
+        img_batch_pill.on("click", _show_img_batch)
+        vid_quick_pill.on("click", _show_vid_quick)
+        vid_batch_pill.on("click", _show_vid_batch)
 
 
 def _render_quick_tab() -> None:
@@ -720,6 +830,399 @@ def _render_quick_tab() -> None:
             "upload-zone-cover"
         )
 
+
+def _render_multiview_tab(user: dict | None) -> None:
+    """Video tab -- upload up to 5 video files, one product per video.
+
+    Frames are extracted automatically (OpenCV for MP4/MOV/AVI, imageio-ffmpeg
+    for WebM), the sharpest ones are selected, then all frames are passed
+    together to the multi-view extraction pipeline as a single product.
+    """
+    from pathlib import Path as _Path
+
+    _MAX_VIDEOS = 5
+    _MAX_MB     = 100
+    _MAX_BYTES  = _MAX_MB * 1024 * 1024
+
+    # ── Pipeline helper ──────────────────────────────────────────────────────────
+
+    async def _run_pipeline_on_video(video_path: _Path, original_name: str) -> bool:
+        """Extract frames, run multi-view pipeline, append row to grid.  Returns True on success."""
+        from backend.db import create_extraction
+        from backend.extractor import MODEL_OPTIONS, extract_from_frames
+        from backend.video_processor import extract_frames_from_video_async, select_best_frames_async
+        from frontend.state import get_grid, result_to_row, row_data
+
+        name_hint = _Path(original_name).stem.replace("_", " ")
+        model_display = get_client_model()
+        backend_name, model_id = MODEL_OPTIONS.get(
+            model_display, next(iter(MODEL_OPTIONS.values()))
+        )
+
+        frame_dir = video_path.parent / f"frames_{video_path.stem}"
+        raw_frames = await extract_frames_from_video_async(video_path, frame_dir)
+        if not raw_frames:
+            raise ValueError("no frames could be extracted from the video")
+
+        best_frames = await select_best_frames_async(raw_frames, max_frames=12)
+        result = await extract_from_frames(
+            frames=best_frames,
+            product_name=name_hint,
+            backend=backend_name,
+            model_id=model_id,
+        )
+
+        extraction_id = create_extraction(
+            user_id=user["id"],
+            original_filename=original_name,
+            result=result,
+            source="video",
+        )
+        row = result_to_row(result, len(row_data))
+        row["db_id"] = extraction_id
+        row["_source"] = "video"
+        row_data.append(row)
+
+        grid = get_grid()
+        if grid:
+            grid.options["rowData"] = list(row_data)
+            grid.update()
+        return True
+
+    # ── Upload state & callbacks ─────────────────────────────────────────────────
+
+    staged: list[tuple[_Path, str]] = []
+
+    async def _on_videos_staged(e: events.MultiUploadEventArguments) -> None:
+        from uuid import uuid4
+        upload_dir = _Path("data/uploads")
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        for file in e.files:
+            if len(staged) >= _MAX_VIDEOS:
+                ui.notify(f"Maximum {_MAX_VIDEOS} videos allowed.", type="warning", position="center")
+                break
+            file_size = file.size()
+            if file_size > _MAX_BYTES:
+                ui.notify(
+                    f"{file.name} is too large ({file_size // (1024 * 1024)} MB). "
+                    f"Limit is {_MAX_MB} MB.",
+                    type="warning", position="center", timeout=6000,
+                )
+                continue
+            suffix = _Path(file.name).suffix or ".mp4"
+            dest = upload_dir / f"{_Path(file.name).stem}_{uuid4().hex[:8]}{suffix}"
+            await file.save(dest)
+            staged.append((dest, file.name))
+        n = len(staged)
+        upload_count_label.set_text(f"{n} video{'s' if n != 1 else ''} ready")
+        upload_submit_btn.set_enabled(n > 0)
+        upload_hint.set_visibility(False)
+        upload_staged.set_visibility(True)
+
+    def _upload_clear() -> None:
+        staged.clear()
+        upload_count_label.set_text("")
+        upload_submit_btn.set_enabled(False)
+        upload_hint.set_visibility(True)
+        upload_staged.set_visibility(False)
+
+    async def _on_upload_submit() -> None:
+        if not staged:
+            ui.notify("Upload at least one video first.", type="warning", position="center")
+            return
+        if not user:
+            ui.notify("Please log in.", type="warning", position="center")
+            return
+        n = len(staged)
+        show_processing(f"Processing {n} video{'s' if n != 1 else ''}…")
+        errors: list[str] = []
+        count = 0
+        for video_path, original_name in staged:
+            try:
+                await _run_pipeline_on_video(video_path, original_name)
+                count += 1
+            except Exception as exc:
+                errors.append(f"{original_name}: {exc}")
+        hide_processing()
+        if count:
+            ui.notify(f"{count} product{'s' if count != 1 else ''} extracted", type="positive", position="center")
+        for msg in errors:
+            ui.notify(msg, type="negative", position="center", timeout=8000)
+        _upload_clear()
+
+    # ── UI ───────────────────────────────────────────────────────────────────────
+
+    with ui.column().classes("w-full gap-3 pt-1"):
+        with ui.element("div").classes("upload-zone w-full").style(
+            "position:relative; min-height:160px"
+        ):
+            upload_hint = ui.column().classes("items-center justify-center gap-2").style(
+                "position:absolute; inset:0; pointer-events:none; padding:28px 20px; z-index:5"
+            )
+            with upload_hint:
+                ui.icon("videocam", size="2rem").style("color:rgba(99,102,241,0.5)")
+                ui.label("Upload a video of your product").style(
+                    "color:#64748b; font-size:14px; font-weight:500;"
+                    "font-family:Inter,sans-serif; letter-spacing:-0.1px; text-align:center"
+                )
+                ui.label("Up to 5 videos · 100 MB max per video · one product per video").style(
+                    "color:#263344; font-size:12px; font-family:Inter,sans-serif; text-align:center"
+                )
+                with ui.element("div").style(
+                    "margin-top:6px; padding:7px 20px;"
+                    "border:1px solid rgba(99,102,241,0.22); border-radius:8px;"
+                ):
+                    ui.label("Add video").style(
+                        "color:#818cf8; font-family:Inter,sans-serif; font-size:12px; font-weight:500"
+                    )
+
+            upload_staged = ui.column().classes("items-center justify-center gap-2").style(
+                "position:absolute; inset:0; pointer-events:none; padding:28px 20px; z-index:5"
+            )
+            upload_staged.set_visibility(False)
+            with upload_staged:
+                ui.icon("check_circle", size="2rem").style("color:rgba(16,185,129,0.6)")
+                upload_count_label = ui.label("").style(
+                    "color:#10b981; font-size:14px; font-weight:500; font-family:Inter,sans-serif"
+                )
+                ui.label("Drop more to add. Each video is one product.").style(
+                    "color:#1e3a2e; font-size:12px; font-family:Inter,sans-serif; text-align:center"
+                )
+
+            ui.upload(
+                multiple=True, auto_upload=True, on_multi_upload=_on_videos_staged,
+            ).props('accept=".mp4,.mov,.avi,.webm,.mkv" flat label=""').classes("upload-zone-cover")
+
+        with ui.row().classes("w-full items-center justify-between pt-1"):
+            ui.button("Clear", icon="clear_all", on_click=_upload_clear).props(
+                "flat dense color=grey-6"
+            ).classes("text-xs")
+            upload_submit_btn = ui.button(
+                "Process Videos", icon="auto_awesome", on_click=_on_upload_submit,
+            ).props("unelevated color=indigo-5").style(
+                "font-size:13px; font-weight:600; padding:0 20px; height:38px"
+            )
+            upload_submit_btn.set_enabled(False)
+
+
+def _render_video_batch_tab(user: dict | None) -> None:
+    """Video Batch tab -- stage up to 50 videos for background extraction.
+
+    Each video is one product.  The job runs as a background asyncio task:
+    frames are extracted, the sharpest ones selected, then passed to the
+    multi-view VLM pipeline.  An email is sent when all videos are done.
+    Results appear in the batch jobs panel and are loaded into the grid
+    automatically when the job completes.
+    """
+    from pathlib import Path as _Path
+
+    _MAX_VIDEOS = 50
+    _MAX_MB     = 100
+    _MAX_BYTES  = _MAX_MB * 1024 * 1024
+
+    staged: list[_Path] = []
+    counters = {"skipped": 0}
+
+    # ── Callbacks ────────────────────────────────────────────────────────────────
+
+    async def _on_staged(e: events.MultiUploadEventArguments) -> None:
+        from uuid import uuid4
+        upload_dir = _Path("data/uploads")
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        for file in e.files:
+            if len(staged) >= _MAX_VIDEOS:
+                ui.notify(
+                    f"Maximum {_MAX_VIDEOS} videos per batch.", type="warning", position="center"
+                )
+                break
+            suffix = _Path(file.name).suffix.lower()
+            if suffix not in {".mp4", ".mov", ".avi", ".webm", ".mkv"}:
+                counters["skipped"] += 1
+                continue
+            file_size = file.size()
+            if file_size > _MAX_BYTES:
+                ui.notify(
+                    f"{file.name} is too large ({file_size // (1024 * 1024)} MB). "
+                    f"Limit is {_MAX_MB} MB.",
+                    type="warning", position="center", timeout=6000,
+                )
+                counters["skipped"] += 1
+                continue
+            dest = upload_dir / f"{_Path(file.name).stem}_{uuid4().hex[:8]}{suffix}"
+            await file.save(dest)
+            staged.append(dest)
+
+        n  = len(staged)
+        sk = counters["skipped"]
+        skip_txt = f" · {sk} file{'s' if sk != 1 else ''} skipped" if sk else ""
+        count_label.set_text(f"{n} video{'s' if n != 1 else ''} ready{skip_txt}")
+        start_btn.set_text(f"Submit Batch · {n} video{'s' if n != 1 else ''}")
+
+        hint_empty.set_visibility(False)
+        staged_hint_label.set_text(f"{n} video{'s' if n != 1 else ''} staged. Drop more to add.")
+        hint_staged.set_visibility(True)
+        staging_area.set_visibility(True)
+
+    def _clear() -> None:
+        staged.clear()
+        counters["skipped"] = 0
+        staging_area.set_visibility(False)
+        hint_staged.set_visibility(False)
+        hint_empty.set_visibility(True)
+
+    async def _on_start() -> None:
+        n = len(staged)
+        if n == 0:
+            return
+        email = (email_input.value or "").strip()
+        if not email:
+            ui.notify(
+                "Please enter an email address so we can notify you when results are ready.",
+                type="warning", position="center",
+            )
+            return
+
+        # Confirmation dialog matching the image batch style.
+        with ui.dialog() as dlg, ui.card().classes("p-6 gap-4").style(
+            "min-width:380px; max-width:480px;"
+            "background:#1e1c19; border:1px solid rgba(99,102,241,0.25);"
+            "border-radius:12px;"
+        ):
+            ui.label("Confirm video batch").classes("text-base font-semibold").style(
+                "color:#f0ebe5"
+            )
+            with ui.column().classes("gap-2 py-1"):
+                for line in [
+                    f"{n} video{'s' if n != 1 else ''} will be submitted for extraction",
+                    f"Results emailed to {email}",
+                    "Each video is treated as one product",
+                    "You can close this page. Results are saved to your account.",
+                ]:
+                    with ui.row().classes("items-start gap-2"):
+                        ui.icon("chevron_right", size="1rem").style(
+                            "color:#6366f1; margin-top:1px; flex-shrink:0"
+                        )
+                        ui.label(line).style("color:#94a3b8; font-size:13px; line-height:1.5")
+            with ui.row().classes("justify-end gap-2 w-full pt-2"):
+                ui.button("Cancel", on_click=lambda: dlg.submit(False)).props(
+                    "flat color=white"
+                ).classes("text-xs")
+                ui.button(
+                    f"Submit {n} video{'s' if n != 1 else ''}",
+                    on_click=lambda: dlg.submit(True),
+                ).props("unelevated color=indigo-5").classes("text-xs")
+
+        if not await dlg:
+            return
+
+        show_processing(f"Queuing {n} video{'s' if n != 1 else ''} for batch extraction…")
+        try:
+            from backend.batch_processor import submit_video_batch
+            from frontend.state import get_client_model
+            await submit_video_batch(
+                paths=list(staged),
+                notify_email=email,
+                user_id=user["id"],
+                model_display_name=get_client_model(),
+            )
+        except Exception as exc:
+            hide_processing()
+            ui.notify(f"Failed to queue batch: {exc}", type="negative", position="center")
+            return
+
+        hide_processing()
+        from frontend.state import refresh_batch_jobs
+        refresh_batch_jobs()
+        ui.notify(
+            f"Video batch queued · {n} video{'s' if n != 1 else ''} · "
+            f"results will be emailed to {email}",
+            type="positive", position="center", timeout=8000,
+        )
+        _clear()
+
+    # ── Drop zone ────────────────────────────────────────────────────────────────
+
+    with ui.element("div").classes("upload-zone w-full").style(
+        "position:relative; min-height:190px"
+    ):
+        with ui.column().classes("items-center justify-center gap-3").style(
+            "position:absolute; inset:0; pointer-events:none; padding:36px 20px; z-index:5"
+        ):
+            hint_empty = ui.column().classes("items-center gap-2")
+            with hint_empty:
+                ui.icon("video_library", size="2rem").style("color:rgba(99,102,241,0.5)")
+                with ui.column().classes("items-center gap-1"):
+                    ui.label("Drop product videos here").style(
+                        "color:#64748b; font-size:14px; font-weight:500;"
+                        "font-family:Inter,sans-serif; letter-spacing:-0.1px"
+                    )
+                    ui.label(
+                        f"Up to {_MAX_VIDEOS} videos · {_MAX_MB} MB max each · "
+                        "one product per video · results in your inbox"
+                    ).style(
+                        "color:#263344; font-size:12px; font-family:Inter,sans-serif;"
+                        "text-align:center"
+                    )
+                with ui.element("div").style(
+                    "margin-top:6px; padding:7px 20px;"
+                    "border:1px solid rgba(99,102,241,0.22); border-radius:8px;"
+                ):
+                    ui.label("Choose videos").style(
+                        "color:#818cf8; font-family:Inter,sans-serif; font-size:12px; font-weight:500"
+                    )
+
+            hint_staged = ui.column().classes("items-center gap-2")
+            hint_staged.set_visibility(False)
+            with hint_staged:
+                ui.icon("check_circle", size="2rem").style("color:rgba(16,185,129,0.6)")
+                staged_hint_label = ui.label("").style(
+                    "color:#10b981; font-size:14px; font-weight:500;"
+                    "font-family:Inter,sans-serif"
+                )
+                ui.label("Drop more videos to add them to the batch").style(
+                    "color:#1e3a2e; font-size:12px; font-family:Inter,sans-serif"
+                )
+
+        ui.upload(
+            multiple=True,
+            auto_upload=True,
+            on_multi_upload=_on_staged,
+        ).props('accept=".mp4,.mov,.avi,.webm,.mkv" flat label=""').classes("upload-zone-cover")
+
+    # ── Staging controls (hidden until first upload) ──────────────────────────────
+
+    staging_area = ui.column().classes("w-full gap-3 px-1 pt-3 pb-1")
+    staging_area.set_visibility(False)
+
+    with staging_area:
+        with ui.row().classes("w-full items-center gap-2"):
+            ui.icon("check_circle", size="1rem").style("color:#10b981; flex-shrink:0")
+            count_label = ui.label("").style(
+                "color:#10b981; font-size:13px; font-weight:500;"
+                "font-family:Inter,sans-serif; flex:1"
+            )
+            ui.button("Clear", icon="clear_all", on_click=_clear).props(
+                "flat dense color=grey-6"
+            ).classes("text-xs")
+
+        with ui.row().classes("w-full items-center gap-3"):
+            ui.icon("mail_outline", size="1rem").style("color:#475569; flex-shrink:0")
+            ui.label("Notify when done:").style(
+                "color:#64748b; font-size:12px; font-family:Inter,sans-serif; white-space:nowrap"
+            )
+            email_input = ui.input(
+                placeholder="you@example.com",
+                value=user.get("email", "") if user else "",
+            ).classes("flex-1").style("font-size:13px")
+
+        with ui.row().classes("w-full justify-end"):
+            start_btn = ui.button(
+                "Submit Batch",
+                icon="rocket_launch",
+                on_click=_on_start,
+            ).props("unelevated color=indigo-5").style(
+                "font-size:13px; font-weight:600; padding:0 20px; height:38px"
+            )
 
 
 def _render_bulk_tab(user: dict | None) -> None:
@@ -946,7 +1449,7 @@ def render_legend():
                     g.options["rowData"] = filtered
                     g.update()
 
-            for key, label in [("all", "All"), ("quick", "Quick Upload"), ("batch", "Batch")]:
+            for key, label in [("all", "All"), ("quick", "Quick Upload"), ("video", "Video"), ("batch", "Batch")]:
                 el = ui.label(label).style(_ACTIVE if key == "all" else _INACTIVE)
                 el.on("click", lambda k=key: _set_filter(k))
                 pills[key] = el

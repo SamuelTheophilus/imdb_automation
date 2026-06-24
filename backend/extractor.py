@@ -36,6 +36,11 @@ env = Environment(loader=FileSystemLoader(jinja_templates_folder))
 SYSTEM_PROMPT    = env.get_template("vlm_system_prompt.j2").render()
 EXTRACTION_PROMPT = env.get_template("vlm_extraction_prompt.j2").render()
 
+# Prompts for the multi-view / video pipeline (one product, many frames).
+# These are kept separate so the standard single-image pipeline is unaffected.
+VIDEO_SYSTEM_PROMPT    = env.get_template("vlm_video_system_prompt.j2").render()
+VIDEO_EXTRACTION_PROMPT = env.get_template("vlm_video_extraction_prompt.j2").render()
+
 # ── Constants ────────────────────────────────────────────────────────────────
 _MAX_ATTEMPTS = 3
 
@@ -508,6 +513,146 @@ def _record_from_group(
     )
     print("[extractor] Returning processed record")
     return record
+
+
+# ── Multi-view / video extraction ────────────────────────────────────────────
+
+async def extract_from_frames(
+    frames: list[Path],
+    product_name: str,
+    backend: str | None = None,
+    model_id: str | None = None,
+) -> "PipelineResult":
+    """Extract one product record from multiple views of the same item.
+
+    Unlike the standard pipeline this function:
+    - Sends ALL frames in a single VLM call (no batching/grouping).
+    - Uses the video prompts that instruct the model to return one flat
+      JSON object rather than one object per image.
+    - Skips tag_text grouping entirely because the caller guarantees all
+      frames show the same product.
+
+    Args:
+        frames:       Ordered list of image paths (best-first after sharpness
+                      selection by the caller).
+        product_name: User-supplied product name hint.  Injected into the user
+                      prompt so the model can confirm or refine it.
+        backend:      One of "anthropic", "openai", "gemini".  Defaults to the
+                      module-level active backend.
+        model_id:     Exact model identifier string.  Defaults to the model
+                      associated with the active backend.
+
+    Returns:
+        A single PipelineResult whose image_paths covers all input frames.
+    """
+    from backend.pipeline import PipelineResult  # local import avoids circular dep
+    from backend.normalizer import check_duplicate, normalize_record
+    from backend.utils import VLMCallParams, VLMImageData
+
+    _backend  = backend  or _active_backend
+    _model_id = model_id or _active_model_id
+
+    # Encode all frames (CPU-bound; kept synchronous here because the caller
+    # already runs inside an async context and frames are few in number).
+    image_data_list: list[VLMImageData] = [
+        VLMImageData(img_path=p.name, encoded_data=_encode_image(p))
+        for p in frames
+    ]
+
+    # Inject the user-supplied name as a hint so the model can confirm or
+    # improve it using the label text actually visible in the images.
+    hint = f'Product name hint: "{product_name}"\n\n' if product_name.strip() else ""
+    user_prompt = hint + VIDEO_EXTRACTION_PROMPT
+
+    params = VLMCallParams(
+        system_prompt=VIDEO_SYSTEM_PROMPT,
+        user_prompt=user_prompt,
+        image_data_list=image_data_list,
+        description=f"video extraction: {product_name or 'unknown'}",
+        model_override=_model_id or None,
+    )
+
+    response = await _vlm_call(params, _backend, _model_id)
+    raw_text  = response.choices[0].message.content or ""
+
+    # Parse the single JSON object the video prompt asks for.
+    # Fall back gracefully if the model returns {"items": [...]} despite
+    # instructions -- unwrap it and take the first item.
+    try:
+        payload = _extract_json_payload(raw_text)
+        if "items" in payload and isinstance(payload["items"], list):
+            payload = payload["items"][0] if payload["items"] else {}
+    except Exception as exc:
+        print(f"[video] JSON parse failed: {exc} — raw: {raw_text[:200]}")
+        payload = {}
+
+    # Normalise the dict the same way the standard pipeline does per-item.
+    item = _normalize_item(payload)
+
+    # Override product_name with the user hint only if the model left it blank.
+    if product_name.strip() and not item.get("product_name"):
+        item["product_name"] = product_name
+
+    # Run barcode decoder on the frames (same decoder the standard pipeline uses).
+    frame_strs = [str(f) for f in frames]
+    pipeline_bc, pipeline_conf = decode_barcode(frame_strs)
+    vlm_bc_raw = item.get("barcode", "")
+    vlm_bc = "".join(c for c in vlm_bc_raw if c.isdigit()) or None
+    barcode_value, barcode_confidence = _resolve_barcode(pipeline_bc, pipeline_conf, vlm_bc)
+
+    def _conf(v) -> float:
+        return 0.9 if v else 0.0
+
+    record = IMDBRecordWithConfidence(
+        barcode=_as_text(barcode_value),
+        category_type=item.get("category_type") or None,
+        segment_type=item.get("segment_type") or None,
+        manufacturer=item.get("manufacturer") or None,
+        brand=item.get("brand") or None,
+        product_name=item.get("product_name") or None,
+        weight=item.get("weight") or None,
+        unit=None,  # not extracted; weight already includes the unit
+        packaging_type=item.get("packaging_type") or None,
+        country_of_origin=item.get("country_of_origin") or None,
+        promotional_messages=item.get("promotional_messages") or None,
+        variant=item.get("variant") or None,
+        fragrance_flavor=item.get("fragrance_flavor") or None,
+        addons=item.get("addons") or None,
+        tagline=item.get("tagline") or None,
+        barcode_confidence=barcode_confidence,
+        category_type_confidence=_conf(item.get("category_type")),
+        segment_type_confidence=_conf(item.get("segment_type")),
+        manufacturer_confidence=_conf(item.get("manufacturer")),
+        brand_confidence=_conf(item.get("brand")),
+        product_name_confidence=_conf(item.get("product_name")),
+        weight_confidence=_conf(item.get("weight")),
+        unit_confidence=0.0,
+        packaging_type_confidence=_conf(item.get("packaging_type")),
+        country_of_origin_confidence=_conf(item.get("country_of_origin")),
+        promotional_messages_confidence=_conf(item.get("promotional_messages")),
+        variant_confidence=_conf(item.get("variant")),
+        fragrance_flavor_confidence=_conf(item.get("fragrance_flavor")),
+        addons_confidence=_conf(item.get("addons")),
+        tagline_confidence=_conf(item.get("tagline")),
+    )
+
+    record, normalized_fields = normalize_record(record)
+    cost = calculate_cost(response.input_tokens, response.output_tokens, _model_id)
+
+    print(
+        f"[video] extracted — brand={record.brand!r} product={record.product_name!r} "
+        f"cost=${cost:.6f}"
+    )
+
+    return PipelineResult(
+        record=record,
+        normalized_fields=normalized_fields,
+        duplicate_suggestions=[],   # duplicate check done by caller if needed
+        image_path=str(frames[0]),  # primary image is the sharpest (first after sort)
+        image_paths=frame_strs,
+        cost_usd=cost,
+        model_used=_model_id,
+    )
 
 
 # ── Batch extraction ─────────────────────────────────────────────────────────

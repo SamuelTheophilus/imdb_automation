@@ -396,6 +396,110 @@ async def _poll_gemini(job: dict) -> None:
     log.warning("[batch:gemini] unknown batch ID format: %s", job["anthropic_batch_id"])
 
 
+# ── Video batch (background asyncio task, no external API) ────────────────────
+
+async def submit_video_batch(
+    paths: list[Path],
+    notify_email: str,
+    user_id: int,
+    model_display_name: str | None = None,
+) -> str:
+    """Queue a video batch job that runs entirely as a background asyncio task.
+
+    Each video is processed independently: frames are extracted, the sharpest
+    ones selected, then all frames are sent together to the VLM as a single
+    multi-view extraction call.  Results are persisted and an email sent when
+    the whole job finishes.
+
+    Uses prefix 'video-batch-' on the fake job ID so the poll loop skips it,
+    the same pattern used for Gemini inline jobs.
+    """
+    from backend.extractor import get_default_display_name
+
+    display_name = model_display_name or get_default_display_name()
+    fake_id = f"video-batch-{uuid.uuid4().hex[:16]}"
+
+    # request_map is not used for video jobs; store empty dict to satisfy schema.
+    job_id = create_batch_job(
+        user_id=user_id,
+        anthropic_batch_id=fake_id,
+        image_paths=paths,
+        request_map={},
+        notify_email=notify_email or None,
+        provider="video",
+    )
+    log.info("[batch:video] queued  job_id=%d  model=%s  videos=%d", job_id, display_name, len(paths))
+
+    job_record = {
+        "id": job_id,
+        "user_id": user_id,
+        "notify_email": notify_email,
+        "anthropic_batch_id": fake_id,
+    }
+    asyncio.create_task(_run_video_batch(job_record, paths, display_name))
+    return fake_id
+
+
+async def _run_video_batch(job: dict, video_paths: list[Path], model_display_name: str) -> None:
+    """Background task: process each video and persist results when all are done.
+
+    Skips individual videos that cannot be read or produce no frames, and
+    counts them as skipped in the final job status.
+    """
+    from backend.extractor import MODEL_OPTIONS, extract_from_frames
+    from backend.video_processor import extract_frames_from_video_async, select_best_frames_async
+
+    backend_name, model_id = MODEL_OPTIONS.get(
+        model_display_name, next(iter(MODEL_OPTIONS.values()))
+    )
+
+    job_id = job["id"]
+    extracted: list[tuple[Path, "PipelineResult"]] = []
+    n_skip = 0
+    skip_names: list[str] = []
+
+    for video_path in video_paths:
+        log.info("[batch:video] job_id=%d  processing %s", job_id, video_path.name)
+        try:
+            frame_dir = video_path.parent / f"frames_{video_path.stem}"
+            raw_frames = await extract_frames_from_video_async(video_path, frame_dir)
+            if not raw_frames:
+                raise ValueError("no frames extracted")
+
+            best_frames = await select_best_frames_async(raw_frames, max_frames=12)
+            name_hint = video_path.stem.replace("_", " ")
+            result = await extract_from_frames(
+                frames=best_frames,
+                product_name=name_hint,
+                backend=backend_name,
+                model_id=model_id,
+            )
+            extracted.append((video_path, result))
+        except Exception as exc:
+            log.warning("[batch:video] job_id=%d  %s failed: %s", job_id, video_path.name, exc)
+            n_skip += 1
+            skip_names.append(video_path.name)
+
+    # Persist all successful extractions under the video batch job.
+    for video_path, result in extracted:
+        create_extraction(
+            user_id=job["user_id"],
+            original_filename=f"[Video Batch #{job_id}] {video_path.name}",
+            result=result,
+            source="video",
+            batch_job_id=job_id,
+        )
+
+    update_batch_job_status(
+        job_id, "completed",
+        result_count=len(extracted),
+        skipped_count=n_skip,
+        skipped_names=skip_names or None,
+    )
+    log.info("[batch:video] job_id=%d — %d extracted, %d skipped", job_id, len(extracted), n_skip)
+    await _notify(job, len(extracted))
+
+
 # ── Entry points ──────────────────────────────────────────────────────────────
 
 async def submit_bulk_batch(
@@ -433,9 +537,15 @@ async def poll_pending_jobs() -> None:
     log.info("[batch:poll] %d pending job(s)", len(jobs))
 
     for job in jobs:
-        job_id  = job["id"]
+        job_id   = job["id"]
         provider = job.get("provider") or "anthropic"
         batch_id = job["anthropic_batch_id"]
+
+        # Video batch jobs and Gemini inline jobs are driven by background
+        # asyncio tasks and self-complete -- there is nothing to poll.
+        if provider == "video" or batch_id.startswith("video-batch-"):
+            log.info("[batch:poll] job_id=%d  provider=video — handled by background task", job_id)
+            continue
 
         log.info("[batch:poll] job_id=%d  provider=%s  batch=%s", job_id, provider, batch_id)
         try:

@@ -25,6 +25,8 @@ dependencies = [
     "zxing-cpp>=3.0.0",
     "opencv-python-headless>=4.13.0.92",
     "anthropic>=0.40.0",
+    "imageio>=2.37.3",
+    "imageio-ffmpeg>=0.6.0",
 ]
 
 [dependency-groups]

@@ -40,6 +40,8 @@ UPLOAD_DIR = Path("data/uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 app.add_static_files("/uploads", UPLOAD_DIR)
 
+
+
 # ── Background batch poller ───────────────────────────────────────────────────
 
 async def _batch_poll_loop() -> None:
@@ -129,7 +131,9 @@ def _render_batch_jobs_section(user_id: int) -> None:
                 icon_name, color, label = _STATUS_STYLE.get(
                     job["status"], ("help_outline", "#64748b", job["status"])
                 )
-                n_images = len(__import__("json").loads(job.get("image_paths_json") or "[]"))
+                n_items = len(__import__("json").loads(job.get("image_paths_json") or "[]"))
+                is_video = job.get("provider") == "video"
+                item_unit = "video" if is_video else "image"
                 email = job.get("notify_email") or ""
                 submitted = format_date(job["submitted_at"])
 
@@ -140,7 +144,7 @@ def _render_batch_jobs_section(user_id: int) -> None:
                     ui.icon(icon_name, size="1.1rem").style(f"color:{color}; flex-shrink:0")
                     with ui.column().classes("gap-0 flex-1"):
                         with ui.row().classes("items-center gap-2"):
-                            ui.label(f"{label} · {n_images} images").style(
+                            ui.label(f"{label} · {n_items} {item_unit}{'s' if n_items != 1 else ''}").style(
                                 f"color:{color}; font-size:13px; font-weight:500;"
                                 "font-family:Inter,sans-serif"
                             )
