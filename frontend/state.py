@@ -177,9 +177,10 @@ def result_to_row(result: PipelineResult, idx: int) -> dict:
         "_low":        ", ".join(result.low_confidence_fields) if result.low_confidence_fields else "",
         "_source":     getattr(result, "source", "quick"),
         "_batch_id":   getattr(result, "batch_job_id", "") or "",
-        "_dupe_of":    dupe_label,
-        "_cost_usd":   getattr(result, "cost_usd", 0.0) or 0.0,
-        "_model_used": getattr(result, "model_used", "") or "",
+        "_dupe_of":       dupe_label,
+        "_cost_usd":      getattr(result, "cost_usd", 0.0) or 0.0,
+        "_model_used":    getattr(result, "model_used", "") or "",
+        "_barcode_audit": getattr(result, "barcode_audit", None),
     }
 
     for key, _ in FIELDS:
@@ -187,6 +188,16 @@ def result_to_row(result: PipelineResult, idx: int) -> dict:
         row[key] = str(val.value if hasattr(val, "value") else val) if val is not None else ""
 
     return row
+
+
+def _parse_barcode_audit(raw: str | None) -> dict | None:
+    import json as _json
+    if not raw:
+        return None
+    try:
+        return _json.loads(raw)
+    except Exception:
+        return None
 
 
 def db_record_to_row(record: dict, idx: int) -> dict:
@@ -224,10 +235,11 @@ def db_record_to_row(record: dict, idx: int) -> dict:
         "_source":     record.get("source") or "quick",
         "_batch_id":   str(record.get("batch_job_id") or ""),
         "_dupe_of":    dupe_label,
-        "_dupe_id":    dupe_id,
-        "_cost_usd":   record.get("cost_usd") or 0.0,
-        "_model_used": record.get("model_used") or "",
-        "video_path":  record.get("video_path") or "",
+        "_dupe_id":       dupe_id,
+        "_cost_usd":      record.get("cost_usd") or 0.0,
+        "_model_used":    record.get("model_used") or "",
+        "video_path":     record.get("video_path") or "",
+        "_barcode_audit": _parse_barcode_audit(record.get("barcode_audit_json")),
     }
     for key, _ in FIELDS:
         row[key] = record.get(key) or ""

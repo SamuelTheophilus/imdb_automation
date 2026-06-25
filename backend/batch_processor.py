@@ -146,6 +146,7 @@ def _persist_results(job: dict, results: list[PipelineResult], n_skip: int, skip
             result=r,
             source="batch",
             batch_job_id=job_id,
+            barcode_audit=r.barcode_audit,
         )
     update_batch_job_status(job_id, "completed",
                             result_count=len(results),
@@ -489,6 +490,7 @@ async def _run_video_batch(job: dict, video_paths: list[Path], model_display_nam
             source="video",
             batch_job_id=job_id,
             video_path=str(video_path),
+            barcode_audit=result.barcode_audit,
         )
 
     update_batch_job_status(

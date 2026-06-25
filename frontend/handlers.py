@@ -85,6 +85,7 @@ async def handle_batch_upload(e: events.MultiUploadEventArguments):
             user_id=user["id"],
             original_filename=original_filename,
             result=result,
+            barcode_audit=result.barcode_audit,
         )
         row = result_to_row(result, len(row_data))
         row["db_id"] = extraction_id

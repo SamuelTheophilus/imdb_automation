@@ -395,7 +395,7 @@ def _resolve_barcode(
     pipeline_bc: str | None,
     pipeline_conf: float,
     vlm_bc: str | None,
-) -> tuple[str | None, float]:
+) -> tuple[str | None, float, dict]:
     """Pick the best barcode from pipeline decoder and VLM digit read.
 
     Priority rules (EAN checksum is the arbiter):
@@ -407,29 +407,42 @@ def _resolve_barcode(
       Only pipeline exists      → pipeline wins
       Only VLM ✓ checksum       → VLM wins (pipeline found nothing valid)
       Only VLM ✗ checksum       → reject (likely hallucinated)
+
+    Returns (barcode, confidence, audit_dict). The audit dict carries the
+    intermediate values for the Barcode Trust panel in the review drawer.
     """
     pip_valid = pipeline_bc is not None and ean_checksum_valid(pipeline_bc)
     vlm_valid = vlm_bc is not None and ean_checksum_valid(vlm_bc)
 
+    def _audit(decision: str, winner: str | None) -> dict:
+        return {
+            "pipeline": pipeline_bc,
+            "pipeline_checksum": pip_valid if pipeline_bc is not None else None,
+            "vlm": vlm_bc,
+            "vlm_checksum": vlm_valid if vlm_bc is not None else None,
+            "decision": decision,
+            "winner": winner,
+        }
+
     if pipeline_bc and vlm_bc:
         if pipeline_bc == vlm_bc:
-            return pipeline_bc, 1.0
+            return pipeline_bc, 1.0, _audit("both_agree", "pipeline")
         if pip_valid and not vlm_valid:
-            return pipeline_bc, pipeline_conf
+            return pipeline_bc, pipeline_conf, _audit("pipeline_wins", "pipeline")
         if vlm_valid and not pip_valid:
             print(f"[barcode] VLM wins over invalid pipeline read: {vlm_bc} vs {pipeline_bc}")
-            return vlm_bc, 0.9
+            return vlm_bc, 0.9, _audit("vlm_wins", "vlm")
         # Both valid but different — pipeline is primary
-        return pipeline_bc, pipeline_conf
+        return pipeline_bc, pipeline_conf, _audit("both_valid_pipeline_primary", "pipeline")
 
     if pipeline_bc:
-        return pipeline_bc, pipeline_conf
+        return pipeline_bc, pipeline_conf, _audit("pipeline_only", "pipeline")
 
     if vlm_bc and vlm_valid:
         print(f"[barcode] VLM-only read (pipeline failed): {vlm_bc}")
-        return vlm_bc, 0.85
+        return vlm_bc, 0.85, _audit("vlm_only", "vlm")
 
-    return None, 0.0
+    return None, 0.0, _audit("none", None)
 
 
 # ── Record builder ───────────────────────────────────────────────────────────
@@ -437,7 +450,7 @@ def _resolve_barcode(
 def _record_from_group(
     group_items: list[dict],
     group_paths: list[str],
-) -> IMDBRecordWithConfidence:
+) -> tuple[IMDBRecordWithConfidence, dict]:
     """Build one IMDBRecordWithConfidence from the aggregated per-face extractions.
 
     Aggregation strategy per field:
@@ -457,7 +470,7 @@ def _record_from_group(
     vlm_bc_raw = _most_common_text(group_items, "barcode")
     vlm_bc = "".join(c for c in (vlm_bc_raw or "") if c.isdigit()) or None
 
-    barcode_value, barcode_confidence = _resolve_barcode(
+    barcode_value, barcode_confidence, barcode_audit = _resolve_barcode(
         pipeline_bc, pipeline_conf, vlm_bc
     )
 
@@ -512,7 +525,7 @@ def _record_from_group(
         tagline_confidence=conf(tagline),
     )
     print("[extractor] Returning processed record")
-    return record
+    return record, barcode_audit
 
 
 # ── Multi-view / video extraction ────────────────────────────────────────────
@@ -598,7 +611,7 @@ async def extract_from_frames(
     pipeline_bc, pipeline_conf = decode_barcode(frame_strs)
     vlm_bc_raw = item.get("barcode", "")
     vlm_bc = "".join(c for c in vlm_bc_raw if c.isdigit()) or None
-    barcode_value, barcode_confidence = _resolve_barcode(pipeline_bc, pipeline_conf, vlm_bc)
+    barcode_value, barcode_confidence, barcode_audit = _resolve_barcode(pipeline_bc, pipeline_conf, vlm_bc)
 
     def _conf(v) -> float:
         return 0.9 if v else 0.0
@@ -652,6 +665,7 @@ async def extract_from_frames(
         image_paths=frame_strs,
         cost_usd=cost,
         model_used=_model_id,
+        barcode_audit=barcode_audit,
     )
 
 
@@ -729,7 +743,7 @@ async def _extract_batch(
 async def extract_information_from_images(
     image_paths: list[str] | list[Path],
     model_display_name: str | None = None,
-) -> list[tuple[IMDBRecordWithConfidence, list[str], float, str]]:
+) -> list[tuple[IMDBRecordWithConfidence, list[str], float, str, dict | None]]:
     """Run extraction on a list of images and return one record per product group.
 
     Flow:
@@ -802,8 +816,8 @@ async def extract_information_from_images(
     extracted_products = []
     for group in grouped_items:
         group_paths = [item["image_path"] for item in group]
-        record = _record_from_group(group, group_paths)
+        record, barcode_audit = _record_from_group(group, group_paths)
         group_cost = total_cost * (len(group_paths) / total_images)
-        extracted_products.append((record, group_paths, group_cost, model_used))
+        extracted_products.append((record, group_paths, group_cost, model_used, barcode_audit))
 
     return extracted_products

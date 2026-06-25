@@ -37,6 +37,7 @@ _NEW_EXTRACTION_COLUMNS = [
     "source",
     "batch_job_id",
     "video_path",
+    "barcode_audit_json",
 ]
 
 
@@ -371,6 +372,7 @@ def create_extraction(
     source: str = "quick",
     batch_job_id: int | None = None,
     video_path: str | None = None,
+    barcode_audit: dict | None = None,
 ) -> int:
     """Save a completed extraction and return the database row id."""
     values = _record_values_from_result(result)
@@ -389,7 +391,7 @@ def create_extraction(
                 product_name, weight, unit, packaging_type, country_of_origin,
                 promotional_messages, variant, fragrance_flavor, addons, tagline,
                 image_paths_json, source, batch_job_id,
-                cost_usd, model_used, video_path
+                cost_usd, model_used, video_path, barcode_audit_json
             )
             VALUES (
                 ?, ?, ?, ?,
@@ -399,7 +401,7 @@ def create_extraction(
                 ?, ?, ?, ?, ?,
                 ?, ?, ?, ?, ?,
                 ?, ?, ?,
-                ?, ?, ?
+                ?, ?, ?, ?
             )
             """,
             (
@@ -438,6 +440,7 @@ def create_extraction(
                 result.cost_usd,
                 result.model_used,
                 video_path,
+                json.dumps(barcode_audit) if barcode_audit else None,
             ),
         )
         extraction_id = int(cursor.lastrowid)

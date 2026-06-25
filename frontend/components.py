@@ -728,6 +728,61 @@ def open_review_drawer(row: dict):
     for key, _ in FIELDS:
         review_inputs[key].value = row.get(key, "")
 
+    # ── Barcode Trust panel ──────────────────────────────────────────────────
+    if review_carousel_container is not None:
+        audit = row.get("_barcode_audit")
+        if audit and audit.get("decision") != "none":
+            _DECISION_LABELS = {
+                "both_agree":              "Both sources agree",
+                "pipeline_wins":           "Pixel scan wins (VLM failed checksum)",
+                "vlm_wins":                "VLM read wins (scan failed checksum)",
+                "both_valid_pipeline_primary": "Both valid -- scan preferred",
+                "pipeline_only":           "Scan only (no VLM digit read)",
+                "vlm_only":                "VLM only (scan found nothing)",
+            }
+            decision_label = _DECISION_LABELS.get(audit.get("decision", ""), audit.get("decision", ""))
+
+            def _check_icon(ok: bool | None) -> str:
+                if ok is True:
+                    return '<span style="color:#22c55e; font-size:11px;">checksum ok</span>'
+                if ok is False:
+                    return '<span style="color:#ef4444; font-size:11px;">checksum fail</span>'
+                return '<span style="color:#64748b; font-size:11px;">--</span>'
+
+            pip_val = audit.get("pipeline") or "--"
+            vlm_val = audit.get("vlm") or "--"
+
+            with review_carousel_container:
+                with ui.expansion("Barcode source").classes("w-full").style(
+                    "border-top:1px solid rgba(255,255,255,0.05);"
+                    "background:#060a12; color:#94a3b8;"
+                    "font-size:12px; font-family:Inter,sans-serif;"
+                ):
+                    with ui.column().classes("w-full gap-2").style("padding:8px 4px 4px"):
+                        for label, val, chk in [
+                            ("Pixel scan", pip_val, audit.get("pipeline_checksum")),
+                            ("VLM text",   vlm_val, audit.get("vlm_checksum")),
+                        ]:
+                            with ui.row().classes("w-full items-center gap-2"):
+                                ui.html(
+                                    f'<span style="color:#64748b; font-size:11px;'
+                                    f' font-family:Inter,sans-serif; width:72px;'
+                                    f' flex-shrink:0;">{label}</span>'
+                                    f'<span style="color:#e2e8f0; font-size:12px;'
+                                    f' font-family:Inter,sans-serif; font-weight:500;'
+                                    f' flex:1;">{val}</span>'
+                                    f'{_check_icon(chk)}'
+                                )
+                        ui.html(
+                            f'<div style="margin-top:4px; padding-top:6px;'
+                            f' border-top:1px solid rgba(255,255,255,0.05);">'
+                            f'<span style="color:#64748b; font-size:11px;'
+                            f' font-family:Inter,sans-serif;">Decision: </span>'
+                            f'<span style="color:#818cf8; font-size:11px;'
+                            f' font-family:Inter,sans-serif; font-weight:500;">{decision_label}</span>'
+                            f'</div>'
+                        )
+
     # ── Duplicate banner + resolve button ────────────────────────────────────
     if review_carousel_container is not None:
         dupe_of = row.get("_dupe_of", "")
@@ -1132,6 +1187,7 @@ def _render_multiview_tab(user: dict | None) -> None:
             result=result,
             source="video",
             video_path=str(video_path),
+            barcode_audit=result.barcode_audit,
         )
         row = result_to_row(result, len(row_data))
         row["db_id"] = extraction_id

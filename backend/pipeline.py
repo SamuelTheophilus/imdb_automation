@@ -24,6 +24,7 @@ class PipelineResult:
         image_paths: list[str] | None = None,
         cost_usd: float = 0.0,
         model_used: str = "",
+        barcode_audit: dict | None = None,
     ):
         self.record = record
         self.normalized_fields = normalized_fields
@@ -32,6 +33,7 @@ class PipelineResult:
         self.image_paths: list[str] = image_paths or [image_path]  # all grouped images
         self.cost_usd = cost_usd
         self.model_used = model_used
+        self.barcode_audit = barcode_audit
 
     @property
     def low_confidence_fields(self) -> list[str]:
@@ -141,12 +143,12 @@ async def run_pipeline(
         ]
 
     print("[pipeline] Extracting from uploaded images...")
-    extracted_products: list[tuple[IMDBRecordWithConfidence, list[str], float, str]] = (
+    extracted_products: list[tuple[IMDBRecordWithConfidence, list[str], float, str, dict | None]] = (
         await extract_information_from_images(verified_paths, model_display_name=model_display_name)
     )
 
     pipeline_results: list[PipelineResult] = []
-    for record, group_paths, cost_usd, model_used in extracted_products:
+    for record, group_paths, cost_usd, model_used, barcode_audit in extracted_products:
         print("[pipeline] Normalizing fields...")
         record, normalized_fields = normalize_record(record)
 
@@ -175,6 +177,7 @@ async def run_pipeline(
                 image_paths=[str(p) for p in group_paths] if group_paths else [str(verified_paths[0])],
                 cost_usd=cost_usd,
                 model_used=model_used,
+                barcode_audit=barcode_audit,
             )
         )
 
