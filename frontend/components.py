@@ -581,7 +581,7 @@ def _open_merge_dialog(current_row: dict, matched_db_id: int) -> None:
                         if r.get("db_id") == primary_id:
                             for k, _ in FIELDS:
                                 r[k] = merged.get(k) or ""
-                            r["_status"] = "ok"
+                            r["_status"] = "warn"
                             r["_dupe_of"] = ""
                             r["_dupe_id"] = None
                     row_data[:] = [r for r in row_data if r.get("db_id") != matched_db_id]
@@ -1167,13 +1167,15 @@ def _render_quick_tab() -> None:
                     "color:#818cf8; font-family:Inter,sans-serif; font-size:12px"
                 )
 
-        ui.upload(
+        _qup = ui.upload(
             multiple=True,
             on_multi_upload=handle_batch_upload,
             auto_upload=True,
         ).props('accept=".jpg,.jpeg,.png,.webp" flat label=""').classes(
             "upload-zone-cover"
         )
+        from frontend.state import set_quick_upload
+        set_quick_upload(_qup)
 
 
 def _render_multiview_tab(user: dict | None) -> None:
@@ -1464,6 +1466,7 @@ def _render_video_batch_tab(user: dict | None) -> None:
             return
 
         show_processing(f"Queuing {n} video{'s' if n != 1 else ''} for batch extraction…")
+        batch_error: Exception | None = None
         try:
             from backend.batch_processor import submit_video_batch
             from frontend.state import get_client_model
@@ -1474,11 +1477,14 @@ def _render_video_batch_tab(user: dict | None) -> None:
                 model_display_name=get_client_model(),
             )
         except Exception as exc:
+            batch_error = exc
+        finally:
             hide_processing()
-            ui.notify(f"Failed to queue batch: {exc}", type="negative", position="center")
+
+        if batch_error is not None:
+            ui.notify(f"Failed to queue batch: {batch_error}", type="negative", position="center")
             return
 
-        hide_processing()
         from frontend.state import refresh_batch_jobs
         refresh_batch_jobs()
         ui.notify(
@@ -1657,14 +1663,18 @@ def _render_bulk_tab(user: dict | None) -> None:
             return
 
         show_processing(f"Queuing {n} images for batch extraction…")
+        batch_error: Exception | None = None
         try:
             await handle_bulk_start(list(staged_paths), email, user)
         except Exception as exc:
+            batch_error = exc
+        finally:
             hide_processing()
-            ui.notify(f"Failed to queue batch: {exc}", type="negative", position="center")
+
+        if batch_error is not None:
+            ui.notify(f"Failed to queue batch: {batch_error}", type="negative", position="center")
             return
 
-        hide_processing()
         from frontend.state import refresh_batch_jobs
         refresh_batch_jobs()
         ui.notify(

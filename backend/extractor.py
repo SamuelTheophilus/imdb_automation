@@ -565,11 +565,12 @@ async def extract_from_frames(
     _backend  = backend  or _active_backend
     _model_id = model_id or _active_model_id
 
-    # Encode all frames (CPU-bound; kept synchronous here because the caller
-    # already runs inside an async context and frames are few in number).
+    encoded_frames = await asyncio.gather(
+        *[asyncio.to_thread(_encode_image, p) for p in frames]
+    )
     image_data_list: list[VLMImageData] = [
-        VLMImageData(img_path=p.name, encoded_data=_encode_image(p))
-        for p in frames
+        VLMImageData(img_path=p.name, encoded_data=enc)
+        for p, enc in zip(frames, encoded_frames)
     ]
 
     # Inject the user-supplied name as a hint so the model can confirm or
@@ -606,9 +607,12 @@ async def extract_from_frames(
     if product_name.strip() and not item.get("product_name"):
         item["product_name"] = product_name
 
-    # Run barcode decoder on the frames (same decoder the standard pipeline uses).
+    # Run barcode decoder in a thread so CPU-heavy OpenCV/pyzbar work
+    # does not block the asyncio event loop.
     frame_strs = [str(f) for f in frames]
-    pipeline_bc, pipeline_conf = decode_barcode(frame_strs)
+    pipeline_bc, pipeline_conf = await asyncio.get_event_loop().run_in_executor(
+        None, decode_barcode, frame_strs
+    )
     vlm_bc_raw = item.get("barcode", "")
     vlm_bc = "".join(c for c in vlm_bc_raw if c.isdigit()) or None
     barcode_value, barcode_confidence, barcode_audit = _resolve_barcode(pipeline_bc, pipeline_conf, vlm_bc)
@@ -681,7 +685,7 @@ async def _extract_batch(
     Returns (per_image_items, input_tokens, output_tokens). Items are matched to
     images positionally. Retries up to _MAX_ATTEMPTS on failure.
     """
-    encoded = [_encode_image(p) for p in batch]
+    encoded = await asyncio.gather(*[asyncio.to_thread(_encode_image, p) for p in batch])
     names = ", ".join(p.name for p in batch)
     last_error = ""
 
@@ -813,10 +817,15 @@ async def extract_information_from_images(
         if path not in grouped_paths:
             grouped_items.append([{"image_path": path, "tag_text": ""}])
 
+    loop = asyncio.get_event_loop()
     extracted_products = []
     for group in grouped_items:
         group_paths = [item["image_path"] for item in group]
-        record, barcode_audit = _record_from_group(group, group_paths)
+        # Run in a thread so CPU-heavy barcode decoding (OpenCV/pyzbar/zxing)
+        # doesn't block the asyncio event loop and drop the websocket heartbeat.
+        record, barcode_audit = await loop.run_in_executor(
+            None, _record_from_group, group, group_paths
+        )
         group_cost = total_cost * (len(group_paths) / total_images)
         extracted_products.append((record, group_paths, group_cost, model_used, barcode_audit))
 

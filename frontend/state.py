@@ -12,6 +12,7 @@ from backend.pipeline import PipelineResult
 
 _grids_by_client: dict[str, object] = {}
 _model_by_client: dict[str, str] = {}
+_uploads_by_client: dict[str, object] = {}
 
 
 def set_grid(grid) -> None:
@@ -23,6 +24,23 @@ def set_grid(grid) -> None:
 def get_grid():
     client = ui.context.client
     return _grids_by_client.get(client.id)
+
+
+def set_quick_upload(upload) -> None:
+    client = ui.context.client
+    _uploads_by_client[client.id] = upload
+    client.on_delete(lambda c: _uploads_by_client.pop(c.id, None))
+
+
+def reset_quick_upload() -> None:
+    """Reset the quick-upload Quasar component so it accepts new files immediately."""
+    try:
+        client = ui.context.client
+        upload = _uploads_by_client.get(client.id)
+        if upload is not None:
+            upload.reset()
+    except Exception:
+        pass
 
 
 row_data: list[dict] = []

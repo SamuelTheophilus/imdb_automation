@@ -191,7 +191,7 @@ async def _submit_anthropic_batch(paths: list[Path], notify_email: str, user_id:
         requests.append({"custom_id": cid, "params": {
             "model": model, "max_tokens": 4096,
             "system": SYSTEM_PROMPT,
-            "messages": [{"role": "user", "content": _anthropic_content(sub)}],
+            "messages": [{"role": "user", "content": await asyncio.to_thread(_anthropic_content, sub)}],
         }})
     batch = await client.messages.batches.create(requests=requests)
     job_id = create_batch_job(user_id=user_id, anthropic_batch_id=batch.id,
@@ -261,7 +261,7 @@ async def _submit_openai_batch(
     for i, sub in enumerate(sub_batches):
         cid = f"b{i}"
         request_map[cid] = [str(p) for p in sub]
-        lines.append(_jsonl_request(cid, sub, model))
+        lines.append(await asyncio.to_thread(_jsonl_request, cid, sub, model))
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
         f.write("\n".join(lines))

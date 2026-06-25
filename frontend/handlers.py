@@ -58,23 +58,33 @@ async def handle_batch_upload(e: events.MultiUploadEventArguments):
     )
     show_processing(f"Processing {upload_label}…")
 
+    results: list[PipelineResult] = []
+    pipeline_error: Exception | None = None
     try:
         existing_records = list_user_extractions(user["id"])
-        results: list[PipelineResult] = await run_pipeline(
+        results = await run_pipeline(
             saved_paths,
             existing_records=existing_records,
             model_display_name=get_client_model(),
         )
     except Exception as exc:
-        if getattr(client, "_deleted", False):
-            return
-        hide_processing()
-        ui.notify(f"Processing failed: {exc}", type="negative", position="center")
+        pipeline_error = exc
+    finally:
+        if not getattr(client, "_deleted", False):
+            hide_processing()
+            from frontend.state import reset_quick_upload
+            reset_quick_upload()
+
+    if pipeline_error is not None:
+        if not getattr(client, "_deleted", False):
+            ui.notify(f"Processing failed: {pipeline_error}", type="negative", position="center")
+        return
+
+    if getattr(client, "_deleted", False):
         return
 
     original_filename = ", ".join(filenames)
 
-    # Track which image paths were covered by a successful result
     covered: set[str] = set()
     for result in results:
         for p in result.image_paths:
@@ -91,15 +101,10 @@ async def handle_batch_upload(e: events.MultiUploadEventArguments):
         row["db_id"] = extraction_id
         row_data.append(row)
 
-    if getattr(client, "_deleted", False):
-        return
-
     grid = get_grid()
     if grid:
         grid.options["rowData"] = list(row_data)
         grid.update()
-
-    hide_processing()
 
     # Images with no product detected — ask the user one at a time
     skipped_paths = [p for p in saved_paths if str(p) not in covered]

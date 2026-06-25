@@ -245,7 +245,7 @@ def merge_extractions(primary_id: int, secondary_id: int, merged_values: dict) -
         conn.execute(
             """
             UPDATE extractions
-               SET status = 'ok',
+               SET status = 'warn',
                    duplicate_suggestions_json = '[]',
                    updated_at = ?
              WHERE id = ?
