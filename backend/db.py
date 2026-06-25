@@ -168,6 +168,18 @@ def init_db() -> None:
                 error_message TEXT,
                 FOREIGN KEY(user_id) REFERENCES users(id)
             );
+
+            CREATE TABLE IF NOT EXISTS brand_catalog (
+                brand TEXT PRIMARY KEY,
+                manufacturer TEXT,
+                category_type TEXT,
+                segment_type TEXT,
+                country_of_origin TEXT,
+                packaging_type TEXT,
+                product_count INTEGER NOT NULL DEFAULT 1,
+                first_seen_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             """
         )
         _migrate_users(conn)
@@ -175,6 +187,7 @@ def init_db() -> None:
         _migrate_batch_jobs(conn)
         _migrate_extraction_costs(conn)
         _seed_missing_versions(conn)
+        _backfill_brand_catalog(conn)
 
 
 def create_user(username: str, password_hash: str, email: str | None = None) -> int:
@@ -240,6 +253,61 @@ def merge_extractions(primary_id: int, secondary_id: int, merged_values: dict) -
             (_utc_now(), primary_id),
         )
     delete_extraction(secondary_id)
+
+
+def upsert_brand_catalog(
+    brand: str,
+    *,
+    manufacturer: str | None = None,
+    category_type: str | None = None,
+    segment_type: str | None = None,
+    country_of_origin: str | None = None,
+    packaging_type: str | None = None,
+) -> None:
+    """Insert a new brand entry or increment the product count for an existing one.
+
+    On conflict we keep existing non-null values and only overwrite with new
+    non-null values, so the catalog never loses confirmed data.
+    """
+    now = _utc_now()
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO brand_catalog
+                (brand, manufacturer, category_type, segment_type,
+                 country_of_origin, packaging_type, product_count,
+                 first_seen_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+            ON CONFLICT(brand) DO UPDATE SET
+                manufacturer     = COALESCE(excluded.manufacturer,     manufacturer),
+                category_type    = COALESCE(excluded.category_type,    category_type),
+                segment_type     = COALESCE(excluded.segment_type,     segment_type),
+                country_of_origin= COALESCE(excluded.country_of_origin,country_of_origin),
+                packaging_type   = COALESCE(excluded.packaging_type,   packaging_type),
+                product_count    = product_count + 1,
+                updated_at       = excluded.updated_at
+            """,
+            (brand, manufacturer, category_type, segment_type,
+             country_of_origin, packaging_type, now, now),
+        )
+
+
+def get_brand_profile(brand: str) -> dict[str, Any] | None:
+    """Return the catalog entry for a single brand, or None if not yet seen."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM brand_catalog WHERE brand = ?", (brand,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def list_brand_catalog() -> list[dict[str, Any]]:
+    """Return all brand catalog entries ordered by product count descending."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM brand_catalog ORDER BY product_count DESC, brand ASC"
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def get_user_by_id(user_id: int) -> dict[str, Any] | None:
@@ -364,6 +432,38 @@ def _seed_missing_versions(conn: sqlite3.Connection) -> None:
         )
 
 
+def _backfill_brand_catalog(conn: sqlite3.Connection) -> None:
+    """Populate brand_catalog from existing extractions on first startup after the
+    feature was added.  Safe to call repeatedly -- upsert is idempotent."""
+    rows = conn.execute(
+        "SELECT brand, manufacturer, category_type, segment_type, country_of_origin,"
+        " packaging_type, created_at FROM extractions"
+        " WHERE brand IS NOT NULL AND brand != '' AND status != 'duplicate'"
+        " ORDER BY created_at ASC"
+    ).fetchall()
+    for row in rows:
+        now = row["created_at"]
+        conn.execute(
+            """
+            INSERT INTO brand_catalog
+                (brand, manufacturer, category_type, segment_type,
+                 country_of_origin, packaging_type, product_count,
+                 first_seen_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+            ON CONFLICT(brand) DO UPDATE SET
+                manufacturer      = COALESCE(excluded.manufacturer,      manufacturer),
+                category_type     = COALESCE(excluded.category_type,     category_type),
+                segment_type      = COALESCE(excluded.segment_type,      segment_type),
+                country_of_origin = COALESCE(excluded.country_of_origin, country_of_origin),
+                packaging_type    = COALESCE(excluded.packaging_type,    packaging_type),
+                product_count     = product_count + 1,
+                updated_at        = excluded.updated_at
+            """,
+            (row["brand"], row["manufacturer"], row["category_type"], row["segment_type"],
+             row["country_of_origin"], row["packaging_type"], now, now),
+        )
+
+
 def create_extraction(
     *,
     user_id: int,
@@ -452,7 +552,20 @@ def create_extraction(
             confidence_json=json.dumps(confidence),
             created_at=now,
         )
-        return extraction_id
+
+    # Only catalog confirmed or low-confidence extractions -- duplicates are not
+    # yet resolved so counting them would inflate brand product_count.
+    if values.get("brand") and not result.has_duplicates:
+        upsert_brand_catalog(
+            values["brand"],
+            manufacturer=values.get("manufacturer"),
+            category_type=values.get("category_type"),
+            segment_type=values.get("segment_type"),
+            country_of_origin=values.get("country_of_origin"),
+            packaging_type=values.get("packaging_type"),
+        )
+
+    return extraction_id
 
 
 def update_extraction_fields(extraction_id: int, values: dict[str, Any]) -> None:

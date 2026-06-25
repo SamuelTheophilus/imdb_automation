@@ -219,6 +219,10 @@ def render_header():
                     "History", icon="history",
                     on_click=lambda: ui.navigate.to("/history"),
                 ).props("flat color=white").classes("text-xs")
+                ui.button(
+                    "Catalog", icon="auto_awesome",
+                    on_click=lambda: ui.navigate.to("/catalog"),
+                ).props("flat color=white").classes("text-xs")
                 ui.button(icon="help_outline", on_click=_replay_tour).props(
                     "flat round dense color=white"
                 ).style("opacity:0.4").tooltip("Take the tour")
@@ -781,6 +785,38 @@ def open_review_drawer(row: dict):
                             f'<span style="color:#818cf8; font-size:11px;'
                             f' font-family:Inter,sans-serif; font-weight:500;">{decision_label}</span>'
                             f'</div>'
+                        )
+
+    # ── Known brand hint ──────────────────────────────────────────────────────
+    if review_carousel_container is not None:
+        brand_val = row.get("brand", "").strip()
+        if brand_val:
+            from backend.db import get_brand_profile
+            profile = get_brand_profile(brand_val)
+            if profile and profile.get("product_count", 0) > 1:
+                parts = []
+                if profile.get("manufacturer"):
+                    parts.append(profile["manufacturer"])
+                if profile.get("category_type"):
+                    parts.append(profile["category_type"])
+                if profile.get("country_of_origin"):
+                    parts.append(profile["country_of_origin"])
+                count = profile["product_count"]
+                detail = " · ".join(parts) if parts else ""
+                with review_carousel_container:
+                    with ui.row().classes("w-full items-center gap-2 px-4 py-2").style(
+                        "border-top:1px solid rgba(255,255,255,0.05);"
+                        "background:rgba(99,102,241,0.05);"
+                    ):
+                        ui.icon("auto_awesome", size="0.9rem").style("color:#818cf8; flex-shrink:0")
+                        ui.html(
+                            f'<span style="color:#818cf8; font-size:11px; font-weight:600;'
+                            f' font-family:Inter,sans-serif;">Known brand</span>'
+                            f'<span style="color:#475569; font-size:11px;'
+                            f' font-family:Inter,sans-serif;"> &nbsp;·&nbsp; seen {count}x</span>'
+                            + (f'<span style="color:#64748b; font-size:11px;'
+                               f' font-family:Inter,sans-serif;"> &nbsp;·&nbsp; {detail}</span>'
+                               if detail else "")
                         )
 
     # ── Duplicate banner + resolve button ────────────────────────────────────

@@ -7,7 +7,7 @@ from nicegui import app, ui
 
 # Importing this module registers the /login and /signup pages with NiceGUI.
 import frontend.auth_pages  # noqa: F401
-from backend.db import delete_batch_job, init_db, list_batch_jobs, list_extraction_versions, list_user_extractions, mark_tour_shown
+from backend.db import delete_batch_job, init_db, list_batch_jobs, list_brand_catalog, list_extraction_versions, list_user_extractions, mark_tour_shown
 from frontend.state import db_record_to_row, set_batch_jobs_refresh, switch_to_batch_view
 from backend.normalizer import load_canonical_brands
 from frontend.auth_pages import require_user
@@ -324,6 +324,96 @@ def history_page():
                             f"v{version['version_number']} · {version['reason']} · "
                             f"{created_at} · {product_name}"
                         ).classes("text-xs text-gray-400")
+
+
+@ui.page("/catalog")
+def catalog_page():
+    user = require_user()
+    if not user:
+        return
+
+    ui.dark_mode().enable()
+    ui.colors(
+        primary="#6366f1",
+        secondary="#818cf8",
+        positive="#10b981",
+        negative="#ef4444",
+        warning="#f59e0b",
+    )
+    ui.add_head_html(STYLES)
+    render_header()
+
+    brands = list_brand_catalog()
+
+    with ui.column().classes("w-full px-6 py-5 gap-5"):
+        with ui.row().classes("w-full items-center justify-between"):
+            with ui.column().classes("gap-1"):
+                ui.label("Brand Catalog").style(
+                    "font-size:20px; font-weight:600; color:#e2e8f0;"
+                    "font-family:Inter,sans-serif; letter-spacing:-0.3px;"
+                )
+                ui.label(
+                    f"{len(brands)} brand{'s' if len(brands) != 1 else ''} learned from your extractions"
+                ).style("font-size:13px; color:#475569; font-family:Inter,sans-serif;")
+            ui.button(
+                "Back to workspace", icon="arrow_back",
+                on_click=lambda: ui.navigate.to("/"),
+            ).props("flat color=white").classes("text-xs")
+
+        if not brands:
+            with ui.column().classes("w-full items-center py-16 gap-3"):
+                ui.icon("auto_awesome", size="2.5rem").style("color:rgba(99,102,241,0.3)")
+                ui.label("No brands yet").style(
+                    "font-size:15px; color:#475569; font-family:Inter,sans-serif;"
+                )
+                ui.label(
+                    "Upload and extract products -- every brand you process is cataloged here."
+                ).style("font-size:13px; color:#334155; font-family:Inter,sans-serif;")
+        else:
+            # Table header
+            with ui.row().classes("w-full px-4 py-2 gap-0").style(
+                "border-bottom:1px solid rgba(255,255,255,0.06);"
+            ):
+                for label, width in [
+                    ("Brand", "25%"), ("Manufacturer", "20%"), ("Category", "15%"),
+                    ("Country", "15%"), ("Packaging", "12%"), ("Products", "13%"),
+                ]:
+                    ui.label(label).style(
+                        f"width:{width}; font-size:11px; font-weight:600; color:#475569;"
+                        "text-transform:uppercase; letter-spacing:0.4px;"
+                        "font-family:Inter,sans-serif;"
+                    )
+
+            for brand in brands:
+                with ui.row().classes("w-full px-4 py-3 gap-0 items-center catalog-row").style(
+                    "border-bottom:1px solid rgba(255,255,255,0.04);"
+                ):
+                    ui.label(brand["brand"] or "").style(
+                        "width:25%; font-size:13px; font-weight:500; color:#e2e8f0;"
+                        "font-family:Inter,sans-serif;"
+                    )
+                    ui.label(brand.get("manufacturer") or "--").style(
+                        "width:20%; font-size:12px; color:#94a3b8;"
+                        "font-family:Inter,sans-serif;"
+                    )
+                    ui.label(brand.get("category_type") or "--").style(
+                        "width:15%; font-size:12px; color:#94a3b8;"
+                        "font-family:Inter,sans-serif;"
+                    )
+                    ui.label(brand.get("country_of_origin") or "--").style(
+                        "width:15%; font-size:12px; color:#94a3b8;"
+                        "font-family:Inter,sans-serif;"
+                    )
+                    ui.label(brand.get("packaging_type") or "--").style(
+                        "width:12%; font-size:12px; color:#94a3b8;"
+                        "font-family:Inter,sans-serif;"
+                    )
+                    count = brand.get("product_count", 0)
+                    ui.html(
+                        f'<span style="width:13%; font-size:12px; font-weight:600;'
+                        f' color:#818cf8; font-family:Inter,sans-serif;">'
+                        f'{count} product{"s" if count != 1 else ""}</span>'
+                    )
 
 
 if __name__ in {"__main__", "__mp_main__"}:
