@@ -3,7 +3,12 @@ from pathlib import Path
 
 from nicegui import events, ui
 
-from backend.db import update_extraction_image_paths, update_extraction_status
+from backend.db import (
+    get_extraction_by_id,
+    merge_extractions,
+    update_extraction_image_paths,
+    update_extraction_status,
+)
 from backend.extractor import MODEL_OPTIONS
 from frontend.auth_pages import current_user, logout, render_change_password_dialog
 from frontend.tour import TOUR_JS, TOUR_SAMPLE_ROW
@@ -408,6 +413,195 @@ async def delete_current_image() -> None:
         pass
 
 
+def _open_merge_dialog(current_row: dict, matched_db_id: int) -> None:
+    """Open the Golden Record merge dialog for two duplicate records.
+
+    Fetches both records fresh from the DB, shows a side-by-side field
+    comparison with auto-suggested winners (highest confidence wins), lets
+    the user override per field, then merges on confirmation.
+    """
+    import json as _json
+    from frontend.state import FIELDS, get_grid, row_data
+
+    primary_id = int(current_row["db_id"])
+    primary_rec = get_extraction_by_id(primary_id)
+    matched_rec = get_extraction_by_id(matched_db_id)
+
+    if not primary_rec or not matched_rec:
+        ui.notify("One of the records no longer exists.", type="warning", position="center")
+        return
+
+    primary_conf = _json.loads(primary_rec.get("confidence_json") or "{}")
+    matched_conf = _json.loads(matched_rec.get("confidence_json") or "{}")
+
+    # For each field decide which record's value is the auto-suggested winner.
+    # Rule: non-empty beats empty; when both non-empty, higher confidence wins.
+    selections: dict[str, str] = {}  # field_key -> "primary" | "matched"
+    for key, _ in FIELDS:
+        pv = (primary_rec.get(key) or "").strip()
+        mv = (matched_rec.get(key) or "").strip()
+        pc = primary_conf.get(key, 0.0)
+        mc = matched_conf.get(key, 0.0)
+        if pv and not mv:
+            selections[key] = "primary"
+        elif mv and not pv:
+            selections[key] = "matched"
+        elif pc >= mc:
+            selections[key] = "primary"
+        else:
+            selections[key] = "matched"
+
+    # ── UI ────────────────────────────────────────────────────────────────────
+    _CARD  = "background:#0d1117; border:1px solid rgba(255,255,255,0.08); border-radius:14px; padding:0; overflow:hidden; min-width:680px; max-width:780px;"
+    _HDR   = "border-bottom:1px solid rgba(255,255,255,0.06);"
+    _LABEL = "font-size:10px; font-weight:600; color:#475569; font-family:Inter,sans-serif; letter-spacing:0.5px; text-transform:uppercase;"
+    _CONF  = "font-size:10px; font-family:Inter,sans-serif; border-radius:4px; padding:1px 5px;"
+
+    def _conf_badge(score: float) -> str:
+        if score >= 0.8:
+            color = "rgba(16,185,129,0.15)"; text = "#10b981"
+        elif score >= 0.6:
+            color = "rgba(245,158,11,0.15)"; text = "#f59e0b"
+        else:
+            color = "rgba(100,116,139,0.15)"; text = "#64748b"
+        return (
+            f'<span style="background:{color}; color:{text}; {_CONF}">'
+            f'{score:.0%}</span>'
+        )
+
+    with ui.dialog() as dlg, ui.card().style(_CARD):
+        # Header
+        with ui.row().classes("w-full items-center justify-between px-5 py-4").style(_HDR):
+            with ui.column().classes("gap-0"):
+                ui.label("Merge Duplicate Records").style(
+                    "font-size:15px; font-weight:700; color:#e2e8f0;"
+                    "font-family:Inter,sans-serif;"
+                )
+                ui.label("Pick the best value for each field. Auto-suggestions are pre-selected.").style(
+                    "font-size:12px; color:#475569; font-family:Inter,sans-serif;"
+                )
+            ui.button(icon="close", on_click=dlg.close).props("flat round dense").style("color:#475569;")
+
+        # Column headers
+        with ui.row().classes("w-full px-5 py-2 gap-0").style(
+            "background:rgba(255,255,255,0.02); border-bottom:1px solid rgba(255,255,255,0.04);"
+        ):
+            ui.label("Field").style(_LABEL + " flex:0 0 140px;")
+            ui.label("This record").style(_LABEL + " flex:1;")
+            ui.label("Matched record").style(_LABEL + " flex:1;")
+
+        # Scrollable field rows
+        with ui.scroll_area().style("max-height:380px; width:100%;"):
+            cell_states: dict[str, dict] = {}  # key -> {primary_el, matched_el}
+
+            for key, label in FIELDS:
+                pv = (primary_rec.get(key) or "").strip()
+                mv = (matched_rec.get(key) or "").strip()
+                if not pv and not mv:
+                    continue  # skip entirely empty fields
+
+                pc = primary_conf.get(key, 0.0)
+                mc = matched_conf.get(key, 0.0)
+
+                _SEL   = "border:1px solid rgba(99,102,241,0.5); background:rgba(99,102,241,0.08); border-radius:8px; cursor:pointer;"
+                _UNSEL = "border:1px solid transparent; background:transparent; border-radius:8px; cursor:pointer; opacity:0.55;"
+
+                p_init = _SEL if selections[key] == "primary" else _UNSEL
+                m_init = _SEL if selections[key] == "matched" else _UNSEL
+
+                with ui.row().classes("w-full items-start px-5 py-2 gap-0").style(
+                    "border-bottom:1px solid rgba(255,255,255,0.03);"
+                ):
+                    ui.label(label).style(
+                        "font-size:11px; color:#64748b; font-family:Inter,sans-serif;"
+                        "font-weight:500; flex:0 0 140px; padding-top:8px;"
+                    )
+
+                    p_cell = ui.column().classes("gap-1 flex-1 p-2").style(p_init)
+                    with p_cell:
+                        ui.html(
+                            f'<span style="font-size:13px; color:#e2e8f0; font-family:Inter,sans-serif;">'
+                            f'{pv or "<em style=\'color:#334155\'>empty</em>"}</span>'
+                            + (f' {_conf_badge(pc)}' if pv else '')
+                        )
+
+                    ui.element("div").style("flex:0 0 8px;")
+
+                    m_cell = ui.column().classes("gap-1 flex-1 p-2").style(m_init)
+                    with m_cell:
+                        ui.html(
+                            f'<span style="font-size:13px; color:#e2e8f0; font-family:Inter,sans-serif;">'
+                            f'{mv or "<em style=\'color:#334155\'>empty</em>"}</span>'
+                            + (f' {_conf_badge(mc)}' if mv else '')
+                        )
+
+                    cell_states[key] = {"p": p_cell, "m": m_cell}
+
+                    # Wire click handlers after both cells exist
+                    def _select_primary(k=key):
+                        selections[k] = "primary"
+                        cell_states[k]["p"].style(_SEL)
+                        cell_states[k]["m"].style(_UNSEL)
+
+                    def _select_matched(k=key):
+                        selections[k] = "matched"
+                        cell_states[k]["p"].style(_UNSEL)
+                        cell_states[k]["m"].style(_SEL)
+
+                    p_cell.on("click", _select_primary)
+                    m_cell.on("click", _select_matched)
+
+        # Footer
+        with ui.row().classes("w-full items-center justify-between px-5 py-4").style(
+            "border-top:1px solid rgba(255,255,255,0.06);"
+        ):
+            ui.label(
+                f"This record · {primary_rec.get('original_filename', '')}"
+            ).style("font-size:11px; color:#334155; font-family:Inter,sans-serif; flex:1;")
+
+            with ui.row().classes("gap-3"):
+                ui.button("Cancel", on_click=dlg.close).props("flat").style(
+                    "color:#475569; font-family:Inter,sans-serif;"
+                )
+
+                def _do_merge():
+                    merged = {}
+                    for key, _ in FIELDS:
+                        rec = primary_rec if selections[key] == "primary" else matched_rec
+                        merged[key] = (rec.get(key) or "").strip() or None
+
+                    merge_extractions(primary_id, matched_db_id, merged)
+
+                    # Update in-memory grid state
+                    for r in row_data:
+                        if r.get("db_id") == primary_id:
+                            for k, _ in FIELDS:
+                                r[k] = merged.get(k) or ""
+                            r["_status"] = "ok"
+                            r["_dupe_of"] = ""
+                            r["_dupe_id"] = None
+                    row_data[:] = [r for r in row_data if r.get("db_id") != matched_db_id]
+
+                    grid = get_grid()
+                    if grid:
+                        grid.options["rowData"] = list(row_data)
+                        grid.update()
+
+                    dlg.close()
+                    if review_drawer:
+                        review_drawer.hide()
+                    ui.notify("Records merged into one verified product.", type="positive", position="center")
+
+                ui.button("Merge into one record", icon="merge", on_click=_do_merge).props(
+                    "unelevated"
+                ).style(
+                    "background:#6366f1; color:#fff; font-family:Inter,sans-serif;"
+                    "font-size:13px; font-weight:600; border-radius:8px; padding:6px 18px;"
+                )
+
+    dlg.open()
+
+
 def open_review_drawer(row: dict):
     """Populate and open the drawer for the clicked grid row."""
     global review_row_id
@@ -534,22 +728,35 @@ def open_review_drawer(row: dict):
     for key, _ in FIELDS:
         review_inputs[key].value = row.get(key, "")
 
-    # ── Duplicate banner — shown when this row matched an existing entry ──────
+    # ── Duplicate banner + resolve button ────────────────────────────────────
     if review_carousel_container is not None:
-        # Find or create the dupe banner slot (just below the carousel)
         dupe_of = row.get("_dupe_of", "")
+        dupe_id = row.get("_dupe_id")
         if dupe_of and row.get("_status") == "duplicate":
             with review_carousel_container:
-                ui.html(
-                    f'<div style="background:rgba(239,68,68,0.07);border-left:3px solid #ef4444;'
-                    f'padding:10px 16px;margin:0;">'
-                    f'<p style="margin:0;font-size:11px;font-weight:600;color:#ef4444;'
-                    f'font-family:Inter,sans-serif;letter-spacing:0.3px;text-transform:uppercase;'
-                    f'margin-bottom:3px">Potential duplicate</p>'
-                    f'<p style="margin:0;font-size:12px;color:#94a3b8;font-family:Inter,sans-serif;'
-                    f'line-height:1.5">{dupe_of}</p>'
-                    f'</div>'
-                )
+                with ui.row().classes("w-full items-center justify-between").style(
+                    "background:rgba(239,68,68,0.07); border-left:3px solid #ef4444;"
+                    "padding:10px 16px; margin:0; gap:8px;"
+                ):
+                    with ui.column().classes("gap-0 flex-1"):
+                        ui.html(
+                            '<p style="margin:0;font-size:11px;font-weight:600;color:#ef4444;'
+                            'font-family:Inter,sans-serif;letter-spacing:0.3px;'
+                            'text-transform:uppercase;margin-bottom:3px">Potential duplicate</p>'
+                            f'<p style="margin:0;font-size:12px;color:#94a3b8;'
+                            f'font-family:Inter,sans-serif;line-height:1.5">{dupe_of}</p>'
+                        )
+                    if dupe_id:
+                        def _open_merge(current=row, matched_db_id=dupe_id):
+                            _open_merge_dialog(current, matched_db_id)
+                        ui.button("Resolve", icon="merge", on_click=_open_merge).props(
+                            "dense unelevated"
+                        ).style(
+                            "background:rgba(239,68,68,0.15); color:#ef4444;"
+                            "font-size:11px; font-weight:600; font-family:Inter,sans-serif;"
+                            "border:1px solid rgba(239,68,68,0.3); border-radius:6px;"
+                            "padding:4px 10px; flex-shrink:0;"
+                        )
 
     # Update status toggle button label to reflect the row's current state
     _sync_status_btn(row.get("_status", "warn"))

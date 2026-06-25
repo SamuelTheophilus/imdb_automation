@@ -197,8 +197,9 @@ def db_record_to_row(record: dict, idx: int) -> dict:
     raw_paths  = record.get("image_paths_json")
     image_paths = _json.loads(raw_paths) if raw_paths else [record["image_path"]]
 
-    # Rebuild dupe label from stored duplicate_suggestions_json
+    # Rebuild dupe label and matched-record id from stored duplicate_suggestions_json
     dupe_label = ""
+    dupe_id: int | None = None
     raw_dupes = record.get("duplicate_suggestions_json") or "[]"
     try:
         dupes = _json.loads(raw_dupes)
@@ -207,6 +208,7 @@ def db_record_to_row(record: dict, idx: int) -> dict:
             name = d.get("product_name") or d.get("brand") or "unknown"
             reason = d.get("match_reason", "")
             dupe_label = f"{name} · {reason}" if reason else name
+            dupe_id = d.get("id")
     except Exception:
         pass
 
@@ -222,6 +224,7 @@ def db_record_to_row(record: dict, idx: int) -> dict:
         "_source":     record.get("source") or "quick",
         "_batch_id":   str(record.get("batch_job_id") or ""),
         "_dupe_of":    dupe_label,
+        "_dupe_id":    dupe_id,
         "_cost_usd":   record.get("cost_usd") or 0.0,
         "_model_used": record.get("model_used") or "",
         "video_path":  record.get("video_path") or "",

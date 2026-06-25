@@ -209,6 +209,38 @@ def delete_extraction(extraction_id: int) -> None:
         conn.execute("DELETE FROM extractions WHERE id = ?", (extraction_id,))
 
 
+def get_extraction_by_id(extraction_id: int) -> dict[str, Any] | None:
+    """Fetch a single extraction record by its primary key."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM extractions WHERE id = ?", (extraction_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def merge_extractions(primary_id: int, secondary_id: int, merged_values: dict) -> None:
+    """Overwrite the primary record with merged field values, clear its duplicate
+    status, and permanently delete the secondary record.
+
+    The caller supplies the winning value for every editable field.  After the
+    merge the primary is marked 'ok' and its duplicate_suggestions_json is
+    cleared so it no longer appears as a duplicate in the grid.
+    """
+    update_extraction_fields(primary_id, merged_values)
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE extractions
+               SET status = 'ok',
+                   duplicate_suggestions_json = '[]',
+                   updated_at = ?
+             WHERE id = ?
+            """,
+            (_utc_now(), primary_id),
+        )
+    delete_extraction(secondary_id)
+
+
 def get_user_by_id(user_id: int) -> dict[str, Any] | None:
     """Fetch one user row by id after a session token has been verified."""
     with get_connection() as conn:
