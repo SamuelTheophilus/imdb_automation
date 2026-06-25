@@ -180,10 +180,12 @@ def result_to_row(result: PipelineResult, idx: int) -> dict:
     # Build duplicate summary for display
     dupe = result.duplicate_suggestions[0] if result.duplicate_suggestions else None
     dupe_label = ""
+    dupe_id: int | None = None
     if dupe:
         name = dupe.get("product_name") or dupe.get("brand") or "unknown"
         reason = dupe.get("match_reason", "")
         dupe_label = f"{name} · {reason}" if reason else name
+        dupe_id = dupe.get("id")
 
     row: dict = {
         "id":          idx,
@@ -196,6 +198,7 @@ def result_to_row(result: PipelineResult, idx: int) -> dict:
         "_source":     getattr(result, "source", "quick"),
         "_batch_id":   getattr(result, "batch_job_id", "") or "",
         "_dupe_of":       dupe_label,
+        "_dupe_id":       dupe_id,
         "_cost_usd":      getattr(result, "cost_usd", 0.0) or 0.0,
         "_model_used":    getattr(result, "model_used", "") or "",
         "_barcode_audit": getattr(result, "barcode_audit", None),

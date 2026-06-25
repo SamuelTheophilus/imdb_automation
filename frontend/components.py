@@ -425,7 +425,7 @@ def _open_merge_dialog(current_row: dict, matched_db_id: int) -> None:
     the user override per field, then merges on confirmation.
     """
     import json as _json
-    from frontend.state import FIELDS, get_grid, row_data
+    from frontend.state import FIELDS, get_grid, row_data, image_to_url as _img_url
 
     primary_id = int(current_row["db_id"])
     primary_rec = get_extraction_by_id(primary_id)
@@ -455,8 +455,20 @@ def _open_merge_dialog(current_row: dict, matched_db_id: int) -> None:
         else:
             selections[key] = "matched"
 
+    # ── Image URL helpers ─────────────────────────────────────────────────────
+    def _get_image_urls(rec: dict) -> list[str]:
+        raw = rec.get("image_paths_json")
+        try:
+            paths = _json.loads(raw) if raw else [rec.get("image_path", "")]
+        except Exception:
+            paths = [rec.get("image_path", "")]
+        return [u for p in (paths or []) if p and (u := _img_url(str(p)))]
+
+    primary_urls = _get_image_urls(primary_rec)
+    matched_urls = _get_image_urls(matched_rec)
+
     # ── UI ────────────────────────────────────────────────────────────────────
-    _CARD  = "background:#0d1117; border:1px solid rgba(255,255,255,0.08); border-radius:14px; padding:0; overflow:hidden; min-width:680px; max-width:780px;"
+    _CARD  = "background:#0d1117; border:1px solid rgba(255,255,255,0.08); border-radius:14px; padding:0; overflow:hidden; min-width:820px; max-width:920px;"
     _HDR   = "border-bottom:1px solid rgba(255,255,255,0.06);"
     _LABEL = "font-size:10px; font-weight:600; color:#475569; font-family:Inter,sans-serif; letter-spacing:0.5px; text-transform:uppercase;"
     _CONF  = "font-size:10px; font-family:Inter,sans-serif; border-radius:4px; padding:1px 5px;"
@@ -486,6 +498,55 @@ def _open_merge_dialog(current_row: dict, matched_db_id: int) -> None:
                 )
             ui.button(icon="close", on_click=dlg.close).props("flat round dense").style("color:#475569;")
 
+        # ── Image carousels ───────────────────────────────────────────────────
+        def _build_carousel(urls: list[str], label: str) -> None:
+            with ui.column().classes("flex-1 gap-1").style("min-width:0;"):
+                ui.label(label).style(_LABEL + " margin-bottom:4px;")
+                if urls:
+                    idx = {"v": 0}
+                    img_el = ui.image(urls[0]).style(
+                        "width:100%; height:150px; object-fit:cover;"
+                        "border-radius:8px; border:1px solid rgba(255,255,255,0.07);"
+                    )
+                    if len(urls) > 1:
+                        with ui.row().classes("w-full items-center justify-center gap-1").style("margin-top:2px;"):
+                            counter = ui.label(f"1 / {len(urls)}").style(
+                                "font-size:10px; color:#475569; font-family:Inter,sans-serif;"
+                                " min-width:32px; text-align:center;"
+                            )
+                            def _prev(u=urls, i=idx, c=counter, el=img_el):
+                                i["v"] = (i["v"] - 1) % len(u)
+                                el.set_source(u[i["v"]])
+                                c.set_text(f"{i['v']+1} / {len(u)}")
+                            def _next(u=urls, i=idx, c=counter, el=img_el):
+                                i["v"] = (i["v"] + 1) % len(u)
+                                el.set_source(u[i["v"]])
+                                c.set_text(f"{i['v']+1} / {len(u)}")
+                            ui.button(icon="chevron_left", on_click=_prev).props("flat round dense").style(
+                                "color:#475569; width:22px; height:22px; order:-1;"
+                            )
+                            counter  # noqa: position counter between arrows
+                            ui.button(icon="chevron_right", on_click=_next).props("flat round dense").style(
+                                "color:#475569; width:22px; height:22px;"
+                            )
+                else:
+                    ui.html(
+                        '<div style="height:150px; display:flex; align-items:center;'
+                        ' justify-content:center; border-radius:8px;'
+                        ' border:1px solid rgba(255,255,255,0.06);">'
+                        '<span style="font-size:11px; color:#334155; font-family:Inter,sans-serif;">No images</span>'
+                        '</div>'
+                    )
+
+        with ui.row().classes("w-full items-start gap-4 px-5 py-4").style(
+            "border-bottom:1px solid rgba(255,255,255,0.04);"
+        ):
+            _build_carousel(primary_urls, "This record")
+            ui.element("div").style(
+                "width:1px; flex-shrink:0; background:rgba(255,255,255,0.05); align-self:stretch;"
+            )
+            _build_carousel(matched_urls, "Matched record")
+
         # Column headers
         with ui.row().classes("w-full px-5 py-2 gap-0").style(
             "background:rgba(255,255,255,0.02); border-bottom:1px solid rgba(255,255,255,0.04);"
@@ -495,7 +556,7 @@ def _open_merge_dialog(current_row: dict, matched_db_id: int) -> None:
             ui.label("Matched record").style(_LABEL + " flex:1;")
 
         # Scrollable field rows
-        with ui.scroll_area().style("max-height:380px; width:100%;"):
+        with ui.scroll_area().style("max-height:300px; width:100%;"):
             cell_states: dict[str, dict] = {}  # key -> {primary_el, matched_el}
 
             for key, label in FIELDS:
@@ -762,28 +823,32 @@ def open_review_drawer(row: dict):
                     "background:#060a12; color:#94a3b8;"
                     "font-size:12px; font-family:Inter,sans-serif;"
                 ):
-                    with ui.column().classes("w-full gap-2").style("padding:8px 4px 4px"):
+                    with ui.column().classes("w-full gap-1").style("padding:8px 6px 6px"):
                         for label, val, chk in [
                             ("Pixel scan", pip_val, audit.get("pipeline_checksum")),
                             ("VLM text",   vlm_val, audit.get("vlm_checksum")),
                         ]:
-                            with ui.row().classes("w-full items-center gap-2"):
-                                ui.html(
-                                    f'<span style="color:#64748b; font-size:11px;'
-                                    f' font-family:Inter,sans-serif; width:72px;'
-                                    f' flex-shrink:0;">{label}</span>'
-                                    f'<span style="color:#e2e8f0; font-size:12px;'
-                                    f' font-family:Inter,sans-serif; font-weight:500;'
-                                    f' flex:1;">{val}</span>'
-                                    f'{_check_icon(chk)}'
-                                )
+                            ui.html(
+                                f'<div style="display:flex; align-items:center;'
+                                f' gap:8px; width:100%; padding:4px 0;">'
+                                f'<span style="color:#475569; font-size:10px;'
+                                f' font-family:Inter,sans-serif; width:64px; flex-shrink:0;'
+                                f' text-transform:uppercase; letter-spacing:0.4px;">{label}</span>'
+                                f'<span style="color:#cbd5e1; font-size:12px;'
+                                f' font-family:DM Mono,monospace; font-weight:500;'
+                                f' flex:1; letter-spacing:0.5px;">{val}</span>'
+                                f'{_check_icon(chk)}'
+                                f'</div>'
+                            )
                         ui.html(
-                            f'<div style="margin-top:4px; padding-top:6px;'
-                            f' border-top:1px solid rgba(255,255,255,0.05);">'
-                            f'<span style="color:#64748b; font-size:11px;'
-                            f' font-family:Inter,sans-serif;">Decision: </span>'
+                            f'<div style="margin-top:6px; padding-top:6px;'
+                            f' border-top:1px solid rgba(255,255,255,0.05);'
+                            f' display:flex; align-items:center; gap:6px;">'
+                            f'<span style="color:#475569; font-size:10px;'
+                            f' font-family:Inter,sans-serif; text-transform:uppercase;'
+                            f' letter-spacing:0.4px; flex-shrink:0;">Decision</span>'
                             f'<span style="color:#818cf8; font-size:11px;'
-                            f' font-family:Inter,sans-serif; font-weight:500;">{decision_label}</span>'
+                            f' font-family:Inter,sans-serif; font-weight:600;">{decision_label}</span>'
                             f'</div>'
                         )
 
@@ -1006,7 +1071,7 @@ def render_upload_zone():
         ):
             with ui.row().classes("items-center gap-1"):
                 outer_img = ui.label("Image").style(_O_ON)
-                outer_vid = ui.label("Video").style(_O_OFF)
+                outer_vid = ui.label("Video").style(_O_OFF).classes("video-tab")
 
             with ui.row().classes("items-center gap-2 pr-1"):
                 ui.label("Model:").style("font-size:11px; color:#64748b")
@@ -1014,7 +1079,7 @@ def render_upload_zone():
                     list(MODEL_OPTIONS.keys()),
                     value=get_client_model(),
                     on_change=lambda e: set_client_model(e.value),
-                ).props("dense dark outlined").style("font-size:11px; min-width:160px")
+                ).props("dense dark outlined").classes("model-selector").style("font-size:11px; min-width:160px")
                 with ui.element("div").style("position:relative"):
                     info_btn = ui.icon("info_outline", size="1rem").style(
                         "color:#475569; cursor:pointer; margin-top:2px"
