@@ -93,13 +93,11 @@ def _render_batch_jobs_section(user_id: int) -> None:
         for job in fresh:
             prev = _last_statuses.get(job["id"])
             if prev == "pending" and job["status"] == "completed":
+                from frontend.state import reapply_source_filter
                 saved = list_user_extractions(user_id)
                 row_data.clear()
                 row_data.extend(db_record_to_row(r, i) for i, r in enumerate(saved))
-                grid = get_grid()
-                if grid:
-                    grid.options["rowData"] = list(row_data)
-                    grid.update()
+                reapply_source_filter()
             _last_statuses[job["id"]] = job["status"]
 
         if not fresh:
@@ -160,14 +158,31 @@ def _render_batch_jobs_section(user_id: int) -> None:
                                     ).on("click", lambda: switch_to_batch_view())
                                 skipped = job.get("skipped_count") or 0
                                 if skipped:
-                                    names = __import__("json").loads(job.get("skipped_names_json") or "[]")
-                                    names_str = ", ".join(names[:5])
-                                    if len(names) > 5:
-                                        names_str += f" +{len(names) - 5} more"
-                                    tip = f"{skipped} skipped — {names_str}" if names_str else f"{skipped} skipped"
-                                    ui.label(f"· {skipped} skipped").style(
-                                        "color:#ef4444; font-size:12px; font-family:Inter,sans-serif; opacity:0.7"
-                                    ).tooltip(tip)
+                                    import json as _json
+                                    from pathlib import Path as _Path
+                                    from frontend.handlers import show_skipped_batch_dialog
+
+                                    _names = _json.loads(job.get("skipped_names_json") or "[]")
+                                    _all_paths = _json.loads(job.get("image_paths_json") or "[]")
+                                    _names_set = set(_names)
+                                    _skipped_paths = [
+                                        p for p in _all_paths if _Path(p).name in _names_set
+                                    ]
+                                    _matched = {_Path(p).name for p in _skipped_paths}
+                                    for _nm in _names:
+                                        if _nm not in _matched:
+                                            _skipped_paths.append(_nm)
+
+                                    def _open_review(sp=_skipped_paths):
+                                        show_skipped_batch_dialog(sp)
+
+                                    ui.label(
+                                        f"· {skipped} skipped — Review"
+                                    ).style(
+                                        "color:#ef4444; font-size:12px; font-family:Inter,sans-serif;"
+                                        "cursor:pointer; text-decoration:underline;"
+                                        "text-underline-offset:2px; opacity:0.8;"
+                                    ).on("click", _open_review)
                         detail_parts = [f"Submitted {submitted}"]
                         if email:
                             detail_parts.append(f"notify {email}")

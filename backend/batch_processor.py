@@ -34,13 +34,19 @@ from backend.extractor import (
     EXTRACTION_PROMPT,
     MODEL_OPTIONS,
     SYSTEM_PROMPT,
+    VIDEO_EXTRACTION_PROMPT,
+    VIDEO_SYSTEM_PROMPT,
+    _as_text,
     _encode_image,
     _extract_json_array,
+    _extract_json_payload,
     _normalize_item,
     _record_from_group,
+    _resolve_barcode,
+    calculate_cost,
 )
 from backend.image_aggregation import group_by_tag_similarity
-from backend.normalizer import normalize_record
+from backend.normalizer import check_duplicate, normalize_record
 from backend.pipeline import PipelineResult
 
 log = logging.getLogger(__name__)
@@ -78,9 +84,13 @@ def _build_results(
     raw_results: dict[str, str],
     token_usage: dict[str, tuple[int, int]] | None = None,
     model_id: str = "",
+    user_id: int | None = None,
 ) -> tuple[list[PipelineResult], int, list[str]]:
     """Turn raw VLM text into grouped PipelineResults. Returns (results, n_skipped, skipped_names)."""
+    from backend.db import list_user_extractions
     from backend.extractor import calculate_cost
+
+    existing_records = list_user_extractions(user_id) if user_id else []
 
     # Per-image cost: distribute each sub-batch's cost evenly across its images.
     image_cost: dict[str, float] = {}
@@ -112,7 +122,7 @@ def _build_results(
     for g_idx, group in enumerate(group_by_tag_similarity(all_items)):
         group_paths = [item["image_path"] for item in group]
         try:
-            record = _record_from_group(group, group_paths)
+            record, barcode_audit = _record_from_group(group, group_paths)
             record, norm_fields = normalize_record(record)
             if not record.brand and not record.product_name and not record.manufacturer:
                 n_skip += len(group_paths)
@@ -123,15 +133,17 @@ def _build_results(
             n_skip += len(group_paths)
             skip_names.extend(Path(p).name for p in group_paths)
             continue
+        dupes = check_duplicate(record, existing_records=existing_records)
         group_cost = sum(image_cost.get(p, 0.0) for p in group_paths)
         results.append(PipelineResult(
             record=record,
             normalized_fields=norm_fields,
-            duplicate_suggestions=[],
+            duplicate_suggestions=dupes,
             image_path=group_paths[0],
             image_paths=group_paths,
             cost_usd=group_cost,
             model_used=model_id,
+            barcode_audit=barcode_audit,
         ))
 
     return results, n_skip, skip_names
@@ -216,7 +228,7 @@ async def _process_anthropic(job: dict) -> None:
             log.warning("[batch:anthropic] request %s: %s", result.custom_id, result.result.type)
             raw[result.custom_id] = ""
     model_id = _model_id_for_provider("anthropic")
-    results, n_skip, names = _build_results(request_map, raw, token_usage, model_id)
+    results, n_skip, names = _build_results(request_map, raw, token_usage, model_id, user_id=job["user_id"])
     _persist_results(job, results, n_skip, names)
     await _notify(job, len(results))
 
@@ -309,7 +321,7 @@ async def _process_openai_batch(job: dict) -> None:
         except (KeyError, TypeError):
             pass
     model_id = _model_id_for_provider("openai")
-    results, n_skip, names = _build_results(request_map, raw, token_usage, model_id)
+    results, n_skip, names = _build_results(request_map, raw, token_usage, model_id, user_id=job["user_id"])
     _persist_results(job, results, n_skip, names)
     await _notify(job, len(results))
 
@@ -385,7 +397,7 @@ async def _run_gemini_inline(job: dict, sub_batches: list[list[Path]], model: st
 
     request_map = json.loads(job["request_map_json"])
     model_id = _model_id_for_provider("gemini")
-    results, n_skip, names = _build_results(request_map, raw, token_usage, model_id)
+    results, n_skip, names = _build_results(request_map, raw, token_usage, model_id, user_id=job["user_id"])
     _persist_results(job, results, n_skip, names)
     await _notify(job, len(results))
 
@@ -397,7 +409,7 @@ async def _poll_gemini(job: dict) -> None:
     log.warning("[batch:gemini] unknown batch ID format: %s", job["anthropic_batch_id"])
 
 
-# ── Video batch (background asyncio task, no external API) ────────────────────
+# ── Video batch (Anthropic Batch API) ────────────────────────────────────────
 
 async def submit_video_batch(
     paths: list[Path],
@@ -405,40 +417,216 @@ async def submit_video_batch(
     user_id: int,
     model_display_name: str | None = None,
 ) -> str:
-    """Queue a video batch job that runs entirely as a background asyncio task.
+    """Extract frames from each video then submit all to the Anthropic Batch API.
 
-    Each video is processed independently: frames are extracted, the sharpest
-    ones selected, then all frames are sent together to the VLM as a single
-    multi-view extraction call.  Results are persisted and an email sent when
-    the whole job finishes.
-
-    Uses prefix 'video-batch-' on the fake job ID so the poll loop skips it,
-    the same pattern used for Gemini inline jobs.
+    Uses provider='anthropic_video' so the poll loop processes results with
+    the video-specific prompt parser instead of the image parser.
     """
-    from backend.extractor import get_default_display_name
+    from backend.extractor import MODEL_OPTIONS, get_default_display_name
+    from backend.video_processor import extract_frames_from_video_async, select_best_frames_async
 
     display_name = model_display_name or get_default_display_name()
-    fake_id = f"video-batch-{uuid.uuid4().hex[:16]}"
+    backend_name, model_id = MODEL_OPTIONS.get(display_name, ("anthropic", _ANTHROPIC_MODEL))
+    if backend_name != "anthropic":
+        # Fall back to background task for non-Anthropic models
+        fake_id = f"video-batch-{uuid.uuid4().hex[:16]}"
+        job_id = create_batch_job(
+            user_id=user_id, anthropic_batch_id=fake_id,
+            image_paths=paths, request_map={},
+            notify_email=notify_email or None, provider="video",
+        )
+        job_record = {"id": job_id, "user_id": user_id, "notify_email": notify_email, "anthropic_batch_id": fake_id}
+        asyncio.create_task(_run_video_batch(job_record, paths, display_name))
+        return fake_id
 
-    # request_map is not used for video jobs; store empty dict to satisfy schema.
+    client = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
+    requests, request_map = [], {}
+    n_skip, skip_names = 0, []
+
+    for i, video_path in enumerate(paths):
+        log.info("[batch:video] extracting frames from %s", video_path.name)
+        try:
+            frame_dir = video_path.parent / f"frames_{video_path.stem}"
+            raw_frames = await extract_frames_from_video_async(video_path, frame_dir)
+            if not raw_frames:
+                raise ValueError("no frames extracted")
+            best_frames = await select_best_frames_async(raw_frames, max_frames=12)
+        except Exception as exc:
+            log.warning("[batch:video] frame extraction failed for %s: %s", video_path.name, exc)
+            n_skip += 1
+            skip_names.append(video_path.name)
+            continue
+
+        cid = f"v{i}"
+        request_map[cid] = str(video_path)
+
+        encoded = await asyncio.gather(*[asyncio.to_thread(_encode_image, f) for f in best_frames])
+        content = []
+        for j, (frame, enc) in enumerate(zip(best_frames, encoded), 1):
+            content.append({"type": "text", "text": f"Frame {j}"})
+            content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": enc}})
+        name_hint = video_path.stem.replace("_", " ")
+        hint = f'Product name hint: "{name_hint}"\n\n' if name_hint.strip() else ""
+        content.append({"type": "text", "text": hint + VIDEO_EXTRACTION_PROMPT})
+
+        requests.append({"custom_id": cid, "params": {
+            "model": model_id, "max_tokens": 1024,
+            "system": VIDEO_SYSTEM_PROMPT,
+            "messages": [{"role": "user", "content": content}],
+        }})
+
+    if not requests:
+        raise ValueError("no videos produced usable frames")
+
+    batch = await client.messages.batches.create(requests=requests)
     job_id = create_batch_job(
-        user_id=user_id,
-        anthropic_batch_id=fake_id,
-        image_paths=paths,
-        request_map={},
-        notify_email=notify_email or None,
-        provider="video",
+        user_id=user_id, anthropic_batch_id=batch.id,
+        image_paths=paths, request_map=request_map,
+        notify_email=notify_email or None, provider="anthropic_video",
     )
-    log.info("[batch:video] queued  job_id=%d  model=%s  videos=%d", job_id, display_name, len(paths))
+    if n_skip:
+        update_batch_job_status(job_id, "pending", skipped_count=n_skip, skipped_names=skip_names)
+    log.info("[batch:video] submitted  batch_id=%s  job_id=%d  videos=%d  skipped=%d",
+             batch.id, job_id, len(requests), n_skip)
+    return batch.id
 
-    job_record = {
-        "id": job_id,
-        "user_id": user_id,
-        "notify_email": notify_email,
-        "anthropic_batch_id": fake_id,
-    }
-    asyncio.create_task(_run_video_batch(job_record, paths, display_name))
-    return fake_id
+
+async def _process_anthropic_video(job: dict) -> None:
+    """Process completed Anthropic Batch API results for a video batch job."""
+    from backend.barcode import decode_barcode
+    from backend.db import list_user_extractions
+    from backend.normalizer import normalize_record
+    from backend.schema import IMDBRecordWithConfidence
+
+    client = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
+    request_map: dict[str, str] = json.loads(job["request_map_json"])  # cid -> video_path
+
+    raw: dict[str, str] = {}
+    token_usage: dict[str, tuple[int, int]] = {}
+    video_model_id: str = _ANTHROPIC_MODEL
+    async for result in await client.messages.batches.results(job["anthropic_batch_id"]):
+        if result.result.type == "succeeded":
+            msg = result.result.message
+            raw[result.custom_id] = msg.content[0].text if msg.content else ""
+            token_usage[result.custom_id] = (msg.usage.input_tokens, msg.usage.output_tokens)
+            video_model_id = msg.model
+        else:
+            log.warning("[batch:video] request %s: %s", result.custom_id, result.result.type)
+            raw[result.custom_id] = ""
+
+    existing_records = list_user_extractions(job["user_id"])
+    results: list[PipelineResult] = []
+    n_skip, skip_names = 0, []
+
+    for cid, video_path_str in sorted(request_map.items()):
+        video_path = Path(video_path_str)
+        raw_text = raw.get(cid, "")
+        if not raw_text:
+            n_skip += 1
+            skip_names.append(video_path.name)
+            continue
+
+        try:
+            try:
+                payload = _extract_json_payload(raw_text)
+                if "items" in payload and isinstance(payload["items"], list):
+                    payload = payload["items"][0] if payload["items"] else {}
+            except Exception:
+                payload = {}
+
+            item = _normalize_item(payload)
+            if video_path.stem.replace("_", " ").strip() and not item.get("product_name"):
+                item["product_name"] = video_path.stem.replace("_", " ")
+
+            frame_dir = video_path.parent / f"frames_{video_path.stem}"
+            frame_paths = sorted(frame_dir.glob("frame_*.jpg")) if frame_dir.exists() else []
+            frame_strs = [str(f) for f in frame_paths]
+
+            pipeline_bc, pipeline_conf = await asyncio.get_event_loop().run_in_executor(
+                None, decode_barcode, frame_strs
+            )
+            vlm_bc_raw = item.get("barcode") or ""
+            vlm_bc = "".join(c for c in vlm_bc_raw if c.isdigit()) or None
+            barcode_value, barcode_confidence, barcode_audit = _resolve_barcode(pipeline_bc, pipeline_conf, vlm_bc)
+
+            def _conf(v) -> float:
+                return 0.9 if v else 0.0
+
+            record = IMDBRecordWithConfidence(
+                barcode=_as_text(barcode_value),
+                category_type=item.get("category_type") or None,
+                segment_type=item.get("segment_type") or None,
+                manufacturer=item.get("manufacturer") or None,
+                brand=item.get("brand") or None,
+                product_name=item.get("product_name") or None,
+                weight=item.get("weight") or None,
+                unit=None,
+                packaging_type=item.get("packaging_type") or None,
+                country_of_origin=item.get("country_of_origin") or None,
+                promotional_messages=item.get("promotional_messages") or None,
+                variant=item.get("variant") or None,
+                fragrance_flavor=item.get("fragrance_flavor") or None,
+                addons=item.get("addons") or None,
+                tagline=item.get("tagline") or None,
+                barcode_confidence=barcode_confidence,
+                category_type_confidence=_conf(item.get("category_type")),
+                segment_type_confidence=_conf(item.get("segment_type")),
+                manufacturer_confidence=_conf(item.get("manufacturer")),
+                brand_confidence=_conf(item.get("brand")),
+                product_name_confidence=_conf(item.get("product_name")),
+                weight_confidence=_conf(item.get("weight")),
+                unit_confidence=0.0,
+                packaging_type_confidence=_conf(item.get("packaging_type")),
+                country_of_origin_confidence=_conf(item.get("country_of_origin")),
+                promotional_messages_confidence=_conf(item.get("promotional_messages")),
+                variant_confidence=_conf(item.get("variant")),
+                fragrance_flavor_confidence=_conf(item.get("fragrance_flavor")),
+                addons_confidence=_conf(item.get("addons")),
+                tagline_confidence=_conf(item.get("tagline")),
+            )
+            record, norm_fields = normalize_record(record)
+
+            if not record.brand and not record.product_name and not record.manufacturer:
+                n_skip += 1
+                skip_names.append(video_path.name)
+                continue
+
+            dupes = check_duplicate(record, existing_records=existing_records)
+            image_path = frame_strs[0] if frame_strs else str(video_path)
+            in_tok, out_tok = token_usage.get(cid, (0, 0))
+            cost = calculate_cost(in_tok, out_tok, video_model_id)
+            results.append(PipelineResult(
+                record=record,
+                normalized_fields=norm_fields,
+                duplicate_suggestions=dupes,
+                image_path=image_path,
+                image_paths=frame_strs or [str(video_path)],
+                cost_usd=cost,
+                model_used=video_model_id,
+                barcode_audit=barcode_audit,
+            ))
+        except Exception as exc:
+            log.warning("[batch:video] cid=%s failed: %s", cid, exc)
+            n_skip += 1
+            skip_names.append(video_path.name)
+
+    # Persist with source="video" so rows appear in the Video filter
+    job_id = job["id"]
+    for r in results:
+        create_extraction(
+            user_id=job["user_id"],
+            original_filename=f"[Video Batch #{job_id}] {Path(r.image_path).parent.name}",
+            result=r,
+            source="video",
+            batch_job_id=job_id,
+            barcode_audit=r.barcode_audit,
+        )
+    update_batch_job_status(job_id, "completed",
+                            result_count=len(results),
+                            skipped_count=(job.get("skipped_count") or 0) + n_skip,
+                            skipped_names=skip_names or None)
+    log.info("[batch:video] job_id=%d — %d extracted, %d skipped", job_id, len(results), n_skip)
+    await _notify(job, len(results))
 
 
 async def _run_video_batch(job: dict, video_paths: list[Path], model_display_name: str) -> None:
@@ -454,7 +642,10 @@ async def _run_video_batch(job: dict, video_paths: list[Path], model_display_nam
         model_display_name, next(iter(MODEL_OPTIONS.values()))
     )
 
+    from backend.db import list_user_extractions
+
     job_id = job["id"]
+    existing_records = list_user_extractions(job["user_id"])
     extracted: list[tuple[Path, "PipelineResult"]] = []
     n_skip = 0
     skip_names: list[str] = []
@@ -475,6 +666,8 @@ async def _run_video_batch(job: dict, video_paths: list[Path], model_display_nam
                 backend=backend_name,
                 model_id=model_id,
             )
+            dupes = check_duplicate(result.record, existing_records=existing_records)
+            result.duplicate_suggestions = dupes
             extracted.append((video_path, result))
         except Exception as exc:
             log.warning("[batch:video] job_id=%d  %s failed: %s", job_id, video_path.name, exc)
@@ -544,15 +737,16 @@ async def poll_pending_jobs() -> None:
         provider = job.get("provider") or "anthropic"
         batch_id = job["anthropic_batch_id"]
 
-        # Video batch jobs and Gemini inline jobs are driven by background
-        # asyncio tasks and self-complete -- there is nothing to poll.
+        # Legacy background-task video jobs self-complete — skip polling.
         if provider == "video" or batch_id.startswith("video-batch-"):
             log.info("[batch:poll] job_id=%d  provider=video — handled by background task", job_id)
             continue
 
         log.info("[batch:poll] job_id=%d  provider=%s  batch=%s", job_id, provider, batch_id)
         try:
-            if provider == "anthropic":
+            if provider == "anthropic_video":
+                await _poll_anthropic_video(job)
+            elif provider == "anthropic":
                 await _poll_anthropic(job)
             elif provider == "gemini":
                 await _poll_gemini(job)
@@ -575,6 +769,17 @@ async def _poll_anthropic(job: dict) -> None:
     if batch.processing_status == "in_progress":
         return
     await _process_anthropic(job)
+
+
+async def _poll_anthropic_video(job: dict) -> None:
+    client = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
+    batch = await client.messages.batches.retrieve(job["anthropic_batch_id"])
+    c = batch.request_counts
+    log.info("[batch:anthropic_video] status=%s  succeeded=%s  errored=%s",
+             batch.processing_status, c.succeeded, c.errored)
+    if batch.processing_status == "in_progress":
+        return
+    await _process_anthropic_video(job)
 
 
 async def _poll_openai(job: dict) -> None:

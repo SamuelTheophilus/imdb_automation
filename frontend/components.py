@@ -23,7 +23,7 @@ from frontend.handlers import (
     stage_bulk_files,
 )
 
-from frontend.state import FIELDS, build_column_defs, get_client_model, get_grid, image_to_url, row_data, set_client_model, set_grid, set_grid_source_filter
+from frontend.state import FIELDS, build_column_defs, get_client_model, get_grid, image_to_url, reapply_source_filter, row_data, set_active_source, set_client_model, set_grid, set_grid_source_filter
 
 review_drawer = None
 review_carousel_container = None
@@ -366,10 +366,7 @@ def toggle_status_from_drawer() -> None:
 
         _sync_status_btn(new_status)
 
-        grid = get_grid()
-        if grid:
-            grid.options["rowData"] = list(row_data)
-            grid.update()
+        reapply_source_filter()
 
         label = "OK" if new_status == "ok" else "Needs review"
         ui.notify(f"Status set to {label}", type="positive", position="center")
@@ -647,10 +644,7 @@ def _open_merge_dialog(current_row: dict, matched_db_id: int) -> None:
                             r["_dupe_id"] = None
                     row_data[:] = [r for r in row_data if r.get("db_id") != matched_db_id]
 
-                    grid = get_grid()
-                    if grid:
-                        grid.options["rowData"] = list(row_data)
-                        grid.update()
+                    reapply_source_filter()
 
                     dlg.close()
                     if review_drawer:
@@ -949,10 +943,7 @@ def _remove_image_from_group(path_to_remove: str) -> None:
     if db_id:
         update_extraction_image_paths(int(db_id), paths)
 
-    grid = get_grid()
-    if grid:
-        grid.options["rowData"] = list(row_data)
-        grid.update()
+    reapply_source_filter()
 
     open_review_drawer(row)
 
@@ -970,10 +961,7 @@ def save_review_drawer():
             row[key] = review_inputs[key].value or ""
 
         persist_row_edits(row)
-        grid = get_grid()
-        if grid:
-            grid.options["rowData"] = list(row_data)
-            grid.update()
+        reapply_source_filter()
         ui.notify("Saved", type="positive", position="center")
         return
 
@@ -1009,10 +997,7 @@ async def delete_from_review_drawer():
     do_delete_row(row_to_delete)
     row_data[:] = [r for r in row_data if r["id"] != review_row_id]
 
-    grid = get_grid()
-    if grid:
-        grid.options["rowData"] = list(row_data)
-        grid.update()
+    reapply_source_filter()
 
     review_drawer.hide()
     ui.notify("Deleted", type="negative", position="center")
@@ -1284,6 +1269,11 @@ def _render_multiview_tab(user: dict | None) -> None:
             model_id=model_id,
         )
 
+        from backend.db import list_user_extractions
+        from backend.normalizer import check_duplicate
+        existing_records = list_user_extractions(user["id"])
+        result.duplicate_suggestions = check_duplicate(result.record, existing_records=existing_records)
+
         extraction_id = create_extraction(
             user_id=user["id"],
             original_filename=original_name,
@@ -1298,11 +1288,8 @@ def _render_multiview_tab(user: dict | None) -> None:
         row["video_path"] = image_to_url(str(video_path))
         row_data.append(row)
 
-        grid = get_grid()
-        if grid:
-            grid.options["rowData"] = list(row_data)
-            grid.update()
-        return True
+        reapply_source_filter()
+        return result
 
     # ── Upload state & callbacks ─────────────────────────────────────────────────
 
@@ -1351,16 +1338,24 @@ def _render_multiview_tab(user: dict | None) -> None:
         n = len(staged)
         show_processing(f"Processing {n} video{'s' if n != 1 else ''}…")
         errors: list[str] = []
-        count = 0
+        results = []
         for video_path, original_name in staged:
             try:
-                await _run_pipeline_on_video(video_path, original_name)
-                count += 1
+                results.append(await _run_pipeline_on_video(video_path, original_name))
             except Exception as exc:
                 errors.append(f"{original_name}: {exc}")
         hide_processing()
-        if count:
-            ui.notify(f"{count} product{'s' if count != 1 else ''} extracted", type="positive", position="center")
+        if results:
+            if any(r.has_duplicates for r in results):
+                ui.notify(
+                    f"Possible duplicate detected in {len(results)} product{'s' if len(results) != 1 else ''}",
+                    type="warning", position="center",
+                )
+            else:
+                ui.notify(
+                    f"{len(results)} product{'s' if len(results) != 1 else ''} extracted",
+                    type="positive", position="center",
+                )
         for msg in errors:
             ui.notify(msg, type="negative", position="center", timeout=8000)
         _upload_clear()
@@ -1863,10 +1858,18 @@ def render_legend():
                 current["filter"] = f
                 for k, el in pills.items():
                     el.style(_ACTIVE if k == f else _INACTIVE)
-                filtered = (
-                    row_data if f == "all"
-                    else [r for r in row_data if r.get("_source") == f]
-                )
+                set_active_source(f)
+                if f == "all":
+                    filtered = row_data
+                elif f == "batch":
+                    # batch tab shows image batch rows AND video batch rows
+                    filtered = [
+                        r for r in row_data
+                        if r.get("_source") == "batch"
+                        or (r.get("_source") == "video" and r.get("_batch_id"))
+                    ]
+                else:
+                    filtered = [r for r in row_data if r.get("_source") == f]
                 g = get_grid()
                 if g:
                     g.options["rowData"] = filtered

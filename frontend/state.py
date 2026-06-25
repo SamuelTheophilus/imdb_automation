@@ -49,6 +49,7 @@ row_data: list[dict] = []
 # without a circular import.
 _batch_jobs_refresh_fn = None
 _grid_filter_by_client: dict[str, object] = {}
+_active_source_by_client: dict[str, str] = {}
 
 
 def set_batch_jobs_refresh(fn) -> None:
@@ -64,7 +65,24 @@ def refresh_batch_jobs() -> None:
 def set_grid_source_filter(fn) -> None:
     client = ui.context.client
     _grid_filter_by_client[client.id] = fn
-    client.on_delete(lambda c: _grid_filter_by_client.pop(c.id, None))
+    client.on_delete(lambda c: (
+        _grid_filter_by_client.pop(c.id, None),
+        _active_source_by_client.pop(c.id, None),
+    ))
+
+
+def set_active_source(source: str) -> None:
+    client = ui.context.client
+    _active_source_by_client[client.id] = source
+
+
+def reapply_source_filter() -> None:
+    """Re-run the active source filter after row_data changes (e.g. delete, merge)."""
+    client = ui.context.client
+    fn = _grid_filter_by_client.get(client.id)
+    source = _active_source_by_client.get(client.id, "all")
+    if fn:
+        fn(source)
 
 
 def get_client_model() -> str:

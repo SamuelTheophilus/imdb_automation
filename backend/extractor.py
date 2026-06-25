@@ -613,7 +613,7 @@ async def extract_from_frames(
     pipeline_bc, pipeline_conf = await asyncio.get_event_loop().run_in_executor(
         None, decode_barcode, frame_strs
     )
-    vlm_bc_raw = item.get("barcode", "")
+    vlm_bc_raw = item.get("barcode") or ""
     vlm_bc = "".join(c for c in vlm_bc_raw if c.isdigit()) or None
     barcode_value, barcode_confidence, barcode_audit = _resolve_barcode(pipeline_bc, pipeline_conf, vlm_bc)
 
