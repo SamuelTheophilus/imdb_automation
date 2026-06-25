@@ -36,6 +36,8 @@ _NEW_EXTRACTION_COLUMNS = [
     "image_paths_json",
     "source",
     "batch_job_id",
+    "video_path",
+    "barcode_audit_json",
 ]
 
 
@@ -48,19 +50,32 @@ def _migrate_extractions(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_users(conn: sqlite3.Connection) -> None:
-    """Add the email column to users if it doesn't exist yet."""
+    """Add columns to users that were introduced after the initial schema."""
     existing = {row[1] for row in conn.execute("PRAGMA table_info(users)")}
     if "email" not in existing:
         conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
+    if "tour_shown" not in existing:
+        conn.execute("ALTER TABLE users ADD COLUMN tour_shown INTEGER DEFAULT 0")
 
 
 def _migrate_batch_jobs(conn: sqlite3.Connection) -> None:
-    """Add skipped_count and skipped_names_json columns to batch_jobs if missing."""
+    """Add columns to batch_jobs introduced after the initial schema."""
     existing = {row[1] for row in conn.execute("PRAGMA table_info(batch_jobs)")}
     if "skipped_count" not in existing:
         conn.execute("ALTER TABLE batch_jobs ADD COLUMN skipped_count INTEGER")
     if "skipped_names_json" not in existing:
         conn.execute("ALTER TABLE batch_jobs ADD COLUMN skipped_names_json TEXT")
+    if "provider" not in existing:
+        conn.execute("ALTER TABLE batch_jobs ADD COLUMN provider TEXT DEFAULT 'anthropic'")
+
+
+def _migrate_extraction_costs(conn: sqlite3.Connection) -> None:
+    """Add cost_usd and model_used columns to extractions if missing."""
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(extractions)")}
+    if "cost_usd" not in existing:
+        conn.execute("ALTER TABLE extractions ADD COLUMN cost_usd REAL")
+    if "model_used" not in existing:
+        conn.execute("ALTER TABLE extractions ADD COLUMN model_used TEXT")
 
 
 def _utc_now() -> str:
@@ -153,12 +168,26 @@ def init_db() -> None:
                 error_message TEXT,
                 FOREIGN KEY(user_id) REFERENCES users(id)
             );
+
+            CREATE TABLE IF NOT EXISTS brand_catalog (
+                brand TEXT PRIMARY KEY,
+                manufacturer TEXT,
+                category_type TEXT,
+                segment_type TEXT,
+                country_of_origin TEXT,
+                packaging_type TEXT,
+                product_count INTEGER NOT NULL DEFAULT 1,
+                first_seen_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             """
         )
         _migrate_users(conn)
         _migrate_extractions(conn)
         _migrate_batch_jobs(conn)
+        _migrate_extraction_costs(conn)
         _seed_missing_versions(conn)
+        _backfill_brand_catalog(conn)
 
 
 def create_user(username: str, password_hash: str, email: str | None = None) -> int:
@@ -194,6 +223,93 @@ def delete_extraction(extraction_id: int) -> None:
         conn.execute("DELETE FROM extractions WHERE id = ?", (extraction_id,))
 
 
+def get_extraction_by_id(extraction_id: int) -> dict[str, Any] | None:
+    """Fetch a single extraction record by its primary key."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM extractions WHERE id = ?", (extraction_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def merge_extractions(primary_id: int, secondary_id: int, merged_values: dict) -> None:
+    """Overwrite the primary record with merged field values, clear its duplicate
+    status, and permanently delete the secondary record.
+
+    The caller supplies the winning value for every editable field.  After the
+    merge the primary is marked 'ok' and its duplicate_suggestions_json is
+    cleared so it no longer appears as a duplicate in the grid.
+    """
+    update_extraction_fields(primary_id, merged_values)
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE extractions
+               SET status = 'warn',
+                   duplicate_suggestions_json = '[]',
+                   updated_at = ?
+             WHERE id = ?
+            """,
+            (_utc_now(), primary_id),
+        )
+    delete_extraction(secondary_id)
+
+
+def upsert_brand_catalog(
+    brand: str,
+    *,
+    manufacturer: str | None = None,
+    category_type: str | None = None,
+    segment_type: str | None = None,
+    country_of_origin: str | None = None,
+    packaging_type: str | None = None,
+) -> None:
+    """Insert a new brand entry or increment the product count for an existing one.
+
+    On conflict we keep existing non-null values and only overwrite with new
+    non-null values, so the catalog never loses confirmed data.
+    """
+    now = _utc_now()
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO brand_catalog
+                (brand, manufacturer, category_type, segment_type,
+                 country_of_origin, packaging_type, product_count,
+                 first_seen_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+            ON CONFLICT(brand) DO UPDATE SET
+                manufacturer     = COALESCE(excluded.manufacturer,     manufacturer),
+                category_type    = COALESCE(excluded.category_type,    category_type),
+                segment_type     = COALESCE(excluded.segment_type,     segment_type),
+                country_of_origin= COALESCE(excluded.country_of_origin,country_of_origin),
+                packaging_type   = COALESCE(excluded.packaging_type,   packaging_type),
+                product_count    = product_count + 1,
+                updated_at       = excluded.updated_at
+            """,
+            (brand, manufacturer, category_type, segment_type,
+             country_of_origin, packaging_type, now, now),
+        )
+
+
+def get_brand_profile(brand: str) -> dict[str, Any] | None:
+    """Return the catalog entry for a single brand, or None if not yet seen."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM brand_catalog WHERE brand = ?", (brand,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def list_brand_catalog() -> list[dict[str, Any]]:
+    """Return all brand catalog entries ordered by product count descending."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM brand_catalog ORDER BY product_count DESC, brand ASC"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def get_user_by_id(user_id: int) -> dict[str, Any] | None:
     """Fetch one user row by id after a session token has been verified."""
     with get_connection() as conn:
@@ -220,6 +336,15 @@ def update_user_password(user_id: int, password_hash: str) -> None:
         conn.execute(
             "UPDATE users SET password_hash = ? WHERE id = ?",
             (password_hash, user_id),
+        )
+
+
+def mark_tour_shown(user_id: int) -> None:
+    """Persist that this user has completed the onboarding tour."""
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE users SET tour_shown = 1 WHERE id = ?",
+            (user_id,),
         )
 
 
@@ -307,6 +432,38 @@ def _seed_missing_versions(conn: sqlite3.Connection) -> None:
         )
 
 
+def _backfill_brand_catalog(conn: sqlite3.Connection) -> None:
+    """Populate brand_catalog from existing extractions on first startup after the
+    feature was added.  Safe to call repeatedly -- upsert is idempotent."""
+    rows = conn.execute(
+        "SELECT brand, manufacturer, category_type, segment_type, country_of_origin,"
+        " packaging_type, created_at FROM extractions"
+        " WHERE brand IS NOT NULL AND brand != '' AND status != 'duplicate'"
+        " ORDER BY created_at ASC"
+    ).fetchall()
+    for row in rows:
+        now = row["created_at"]
+        conn.execute(
+            """
+            INSERT INTO brand_catalog
+                (brand, manufacturer, category_type, segment_type,
+                 country_of_origin, packaging_type, product_count,
+                 first_seen_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+            ON CONFLICT(brand) DO UPDATE SET
+                manufacturer      = COALESCE(excluded.manufacturer,      manufacturer),
+                category_type     = COALESCE(excluded.category_type,     category_type),
+                segment_type      = COALESCE(excluded.segment_type,      segment_type),
+                country_of_origin = COALESCE(excluded.country_of_origin, country_of_origin),
+                packaging_type    = COALESCE(excluded.packaging_type,    packaging_type),
+                product_count     = product_count + 1,
+                updated_at        = excluded.updated_at
+            """,
+            (row["brand"], row["manufacturer"], row["category_type"], row["segment_type"],
+             row["country_of_origin"], row["packaging_type"], now, now),
+        )
+
+
 def create_extraction(
     *,
     user_id: int,
@@ -314,6 +471,8 @@ def create_extraction(
     result: PipelineResult,
     source: str = "quick",
     batch_job_id: int | None = None,
+    video_path: str | None = None,
+    barcode_audit: dict | None = None,
 ) -> int:
     """Save a completed extraction and return the database row id."""
     values = _record_values_from_result(result)
@@ -331,7 +490,8 @@ def create_extraction(
                 barcode, category_type, segment_type, manufacturer, brand,
                 product_name, weight, unit, packaging_type, country_of_origin,
                 promotional_messages, variant, fragrance_flavor, addons, tagline,
-                image_paths_json, source, batch_job_id
+                image_paths_json, source, batch_job_id,
+                cost_usd, model_used, video_path, barcode_audit_json
             )
             VALUES (
                 ?, ?, ?, ?,
@@ -340,7 +500,8 @@ def create_extraction(
                 ?, ?, ?, ?, ?,
                 ?, ?, ?, ?, ?,
                 ?, ?, ?, ?, ?,
-                ?, ?, ?
+                ?, ?, ?,
+                ?, ?, ?, ?
             )
             """,
             (
@@ -376,6 +537,10 @@ def create_extraction(
                 json.dumps(result.image_paths),
                 source,
                 batch_job_id,
+                result.cost_usd,
+                result.model_used,
+                video_path,
+                json.dumps(barcode_audit) if barcode_audit else None,
             ),
         )
         extraction_id = int(cursor.lastrowid)
@@ -387,7 +552,20 @@ def create_extraction(
             confidence_json=json.dumps(confidence),
             created_at=now,
         )
-        return extraction_id
+
+    # Only catalog confirmed or low-confidence extractions -- duplicates are not
+    # yet resolved so counting them would inflate brand product_count.
+    if values.get("brand") and not result.has_duplicates:
+        upsert_brand_catalog(
+            values["brand"],
+            manufacturer=values.get("manufacturer"),
+            category_type=values.get("category_type"),
+            segment_type=values.get("segment_type"),
+            country_of_origin=values.get("country_of_origin"),
+            packaging_type=values.get("packaging_type"),
+        )
+
+    return extraction_id
 
 
 def update_extraction_fields(extraction_id: int, values: dict[str, Any]) -> None:
@@ -498,6 +676,7 @@ def create_batch_job(
     image_paths: list,
     request_map: dict,
     notify_email: str | None = None,
+    provider: str = "anthropic",
 ) -> int:
     """Persist a new batch job and return its id."""
     with get_connection() as conn:
@@ -506,8 +685,8 @@ def create_batch_job(
             INSERT INTO batch_jobs (
                 user_id, anthropic_batch_id, status,
                 image_paths_json, request_map_json,
-                notify_email, submitted_at
-            ) VALUES (?, ?, 'pending', ?, ?, ?, ?)
+                notify_email, submitted_at, provider
+            ) VALUES (?, ?, 'pending', ?, ?, ?, ?, ?)
             """,
             (
                 user_id,
@@ -516,6 +695,7 @@ def create_batch_job(
                 json.dumps(request_map),
                 notify_email or None,
                 _utc_now(),
+                provider,
             ),
         )
         return int(cursor.lastrowid)

@@ -11,6 +11,8 @@ from backend.pipeline import PipelineResult
 # load and kept in sync with the grid via direct mutation.
 
 _grids_by_client: dict[str, object] = {}
+_model_by_client: dict[str, str] = {}
+_uploads_by_client: dict[str, object] = {}
 
 
 def set_grid(grid) -> None:
@@ -24,12 +26,30 @@ def get_grid():
     return _grids_by_client.get(client.id)
 
 
+def set_quick_upload(upload) -> None:
+    client = ui.context.client
+    _uploads_by_client[client.id] = upload
+    client.on_delete(lambda c: _uploads_by_client.pop(c.id, None))
+
+
+def reset_quick_upload() -> None:
+    """Reset the quick-upload Quasar component so it accepts new files immediately."""
+    try:
+        client = ui.context.client
+        upload = _uploads_by_client.get(client.id)
+        if upload is not None:
+            upload.reset()
+    except Exception:
+        pass
+
+
 row_data: list[dict] = []
 
 # Callback registered by app.py so components.py can trigger a batch jobs refresh
 # without a circular import.
 _batch_jobs_refresh_fn = None
 _grid_filter_by_client: dict[str, object] = {}
+_active_source_by_client: dict[str, str] = {}
 
 
 def set_batch_jobs_refresh(fn) -> None:
@@ -45,7 +65,37 @@ def refresh_batch_jobs() -> None:
 def set_grid_source_filter(fn) -> None:
     client = ui.context.client
     _grid_filter_by_client[client.id] = fn
-    client.on_delete(lambda c: _grid_filter_by_client.pop(c.id, None))
+    client.on_delete(lambda c: (
+        _grid_filter_by_client.pop(c.id, None),
+        _active_source_by_client.pop(c.id, None),
+    ))
+
+
+def set_active_source(source: str) -> None:
+    client = ui.context.client
+    _active_source_by_client[client.id] = source
+
+
+def reapply_source_filter() -> None:
+    """Re-run the active source filter after row_data changes (e.g. delete, merge)."""
+    client = ui.context.client
+    fn = _grid_filter_by_client.get(client.id)
+    source = _active_source_by_client.get(client.id, "all")
+    if fn:
+        fn(source)
+
+
+def get_client_model() -> str:
+    """Return the model display name selected by this client, or the env default."""
+    from backend.extractor import get_default_display_name
+    client = ui.context.client
+    return _model_by_client.get(client.id) or get_default_display_name()
+
+
+def set_client_model(display_name: str) -> None:
+    client = ui.context.client
+    _model_by_client[client.id] = display_name
+    client.on_delete(lambda c: _model_by_client.pop(c.id, None))
 
 
 def switch_to_batch_view() -> None:
@@ -148,10 +198,12 @@ def result_to_row(result: PipelineResult, idx: int) -> dict:
     # Build duplicate summary for display
     dupe = result.duplicate_suggestions[0] if result.duplicate_suggestions else None
     dupe_label = ""
+    dupe_id: int | None = None
     if dupe:
         name = dupe.get("product_name") or dupe.get("brand") or "unknown"
         reason = dupe.get("match_reason", "")
         dupe_label = f"{name} · {reason}" if reason else name
+        dupe_id = dupe.get("id")
 
     row: dict = {
         "id":          idx,
@@ -163,7 +215,11 @@ def result_to_row(result: PipelineResult, idx: int) -> dict:
         "_low":        ", ".join(result.low_confidence_fields) if result.low_confidence_fields else "",
         "_source":     getattr(result, "source", "quick"),
         "_batch_id":   getattr(result, "batch_job_id", "") or "",
-        "_dupe_of":    dupe_label,
+        "_dupe_of":       dupe_label,
+        "_dupe_id":       dupe_id,
+        "_cost_usd":      getattr(result, "cost_usd", 0.0) or 0.0,
+        "_model_used":    getattr(result, "model_used", "") or "",
+        "_barcode_audit": getattr(result, "barcode_audit", None),
     }
 
     for key, _ in FIELDS:
@@ -171,6 +227,16 @@ def result_to_row(result: PipelineResult, idx: int) -> dict:
         row[key] = str(val.value if hasattr(val, "value") else val) if val is not None else ""
 
     return row
+
+
+def _parse_barcode_audit(raw: str | None) -> dict | None:
+    import json as _json
+    if not raw:
+        return None
+    try:
+        return _json.loads(raw)
+    except Exception:
+        return None
 
 
 def db_record_to_row(record: dict, idx: int) -> dict:
@@ -181,8 +247,9 @@ def db_record_to_row(record: dict, idx: int) -> dict:
     raw_paths  = record.get("image_paths_json")
     image_paths = _json.loads(raw_paths) if raw_paths else [record["image_path"]]
 
-    # Rebuild dupe label from stored duplicate_suggestions_json
+    # Rebuild dupe label and matched-record id from stored duplicate_suggestions_json
     dupe_label = ""
+    dupe_id: int | None = None
     raw_dupes = record.get("duplicate_suggestions_json") or "[]"
     try:
         dupes = _json.loads(raw_dupes)
@@ -191,6 +258,7 @@ def db_record_to_row(record: dict, idx: int) -> dict:
             name = d.get("product_name") or d.get("brand") or "unknown"
             reason = d.get("match_reason", "")
             dupe_label = f"{name} · {reason}" if reason else name
+            dupe_id = d.get("id")
     except Exception:
         pass
 
@@ -206,6 +274,11 @@ def db_record_to_row(record: dict, idx: int) -> dict:
         "_source":     record.get("source") or "quick",
         "_batch_id":   str(record.get("batch_job_id") or ""),
         "_dupe_of":    dupe_label,
+        "_dupe_id":       dupe_id,
+        "_cost_usd":      record.get("cost_usd") or 0.0,
+        "_model_used":    record.get("model_used") or "",
+        "video_path":     record.get("video_path") or "",
+        "_barcode_audit": _parse_barcode_audit(record.get("barcode_audit_json")),
     }
     for key, _ in FIELDS:
         row[key] = record.get(key) or ""
@@ -380,6 +453,21 @@ def build_column_defs() -> list[dict]:
                     + 'font-size:10px;color:#475569;font-family:DM Mono,monospace;'
                     + 'background:rgba(99,102,241,0.08);border-radius:4px;padding:2px 6px">'
                     + '#' + p.value + '</span>';
+            }""",
+        },
+        {
+            "headerName": "Cost",
+            "field": "_cost_usd",
+            "width": 80, "minWidth": 80, "maxWidth": 80,
+            "resizable": False, "editable": False, "sortable": True, "filter": False,
+            "pinned": "left",
+            "headerTooltip": "Estimated API cost for this extraction",
+            ":cellRenderer": """function(p) {
+                var v = parseFloat(p.value) || 0;
+                if (v === 0) return '<span style="color:#475569;font-size:10px;font-family:DM Mono,monospace">--</span>';
+                var s = v < 0.001 ? v.toFixed(6) : v.toFixed(4);
+                return '<span title="Model: ' + (p.data._model_used || 'unknown') + '" style="'
+                    + 'font-size:10px;color:#10b981;font-family:DM Mono,monospace">$' + s + '</span>';
             }""",
         },
         {

@@ -7,7 +7,7 @@ from nicegui import app, ui
 
 # Importing this module registers the /login and /signup pages with NiceGUI.
 import frontend.auth_pages  # noqa: F401
-from backend.db import delete_batch_job, init_db, list_batch_jobs, list_extraction_versions, list_user_extractions
+from backend.db import delete_batch_job, init_db, list_batch_jobs, list_brand_catalog, list_extraction_versions, list_user_extractions, mark_tour_shown
 from frontend.state import db_record_to_row, set_batch_jobs_refresh, switch_to_batch_view
 from backend.normalizer import load_canonical_brands
 from frontend.auth_pages import require_user
@@ -40,6 +40,8 @@ UPLOAD_DIR = Path("data/uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 app.add_static_files("/uploads", UPLOAD_DIR)
 
+
+
 # ── Background batch poller ───────────────────────────────────────────────────
 
 async def _batch_poll_loop() -> None:
@@ -55,7 +57,7 @@ async def _batch_poll_loop() -> None:
             await poll_pending_jobs()
         except Exception as exc:
             log.error("[batch_poller] unhandled error in cycle #%d: %s", cycle, exc)
-        log.info("[batch_poller] cycle #%d done — next in 5 min", cycle)
+        log.info("[batch_poller] cycle #%d done — next in 2 min", cycle)
         await asyncio.sleep(120)
 
 
@@ -91,13 +93,11 @@ def _render_batch_jobs_section(user_id: int) -> None:
         for job in fresh:
             prev = _last_statuses.get(job["id"])
             if prev == "pending" and job["status"] == "completed":
+                from frontend.state import reapply_source_filter
                 saved = list_user_extractions(user_id)
                 row_data.clear()
                 row_data.extend(db_record_to_row(r, i) for i, r in enumerate(saved))
-                grid = get_grid()
-                if grid:
-                    grid.options["rowData"] = list(row_data)
-                    grid.update()
+                reapply_source_filter()
             _last_statuses[job["id"]] = job["status"]
 
         if not fresh:
@@ -129,7 +129,9 @@ def _render_batch_jobs_section(user_id: int) -> None:
                 icon_name, color, label = _STATUS_STYLE.get(
                     job["status"], ("help_outline", "#64748b", job["status"])
                 )
-                n_images = len(__import__("json").loads(job.get("image_paths_json") or "[]"))
+                n_items = len(__import__("json").loads(job.get("image_paths_json") or "[]"))
+                is_video = job.get("provider") == "video"
+                item_unit = "video" if is_video else "image"
                 email = job.get("notify_email") or ""
                 submitted = format_date(job["submitted_at"])
 
@@ -140,7 +142,7 @@ def _render_batch_jobs_section(user_id: int) -> None:
                     ui.icon(icon_name, size="1.1rem").style(f"color:{color}; flex-shrink:0")
                     with ui.column().classes("gap-0 flex-1"):
                         with ui.row().classes("items-center gap-2"):
-                            ui.label(f"{label} · {n_images} images").style(
+                            ui.label(f"{label} · {n_items} {item_unit}{'s' if n_items != 1 else ''}").style(
                                 f"color:{color}; font-size:13px; font-weight:500;"
                                 "font-family:Inter,sans-serif"
                             )
@@ -156,14 +158,31 @@ def _render_batch_jobs_section(user_id: int) -> None:
                                     ).on("click", lambda: switch_to_batch_view())
                                 skipped = job.get("skipped_count") or 0
                                 if skipped:
-                                    names = __import__("json").loads(job.get("skipped_names_json") or "[]")
-                                    names_str = ", ".join(names[:5])
-                                    if len(names) > 5:
-                                        names_str += f" +{len(names) - 5} more"
-                                    tip = f"{skipped} skipped — {names_str}" if names_str else f"{skipped} skipped"
-                                    ui.label(f"· {skipped} skipped").style(
-                                        "color:#ef4444; font-size:12px; font-family:Inter,sans-serif; opacity:0.7"
-                                    ).tooltip(tip)
+                                    import json as _json
+                                    from pathlib import Path as _Path
+                                    from frontend.handlers import show_skipped_batch_dialog
+
+                                    _names = _json.loads(job.get("skipped_names_json") or "[]")
+                                    _all_paths = _json.loads(job.get("image_paths_json") or "[]")
+                                    _names_set = set(_names)
+                                    _skipped_paths = [
+                                        p for p in _all_paths if _Path(p).name in _names_set
+                                    ]
+                                    _matched = {_Path(p).name for p in _skipped_paths}
+                                    for _nm in _names:
+                                        if _nm not in _matched:
+                                            _skipped_paths.append(_nm)
+
+                                    def _open_review(sp=_skipped_paths):
+                                        show_skipped_batch_dialog(sp)
+
+                                    ui.label(
+                                        f"· {skipped} skipped — Review"
+                                    ).style(
+                                        "color:#ef4444; font-size:12px; font-family:Inter,sans-serif;"
+                                        "cursor:pointer; text-decoration:underline;"
+                                        "text-underline-offset:2px; opacity:0.8;"
+                                    ).on("click", _open_review)
                         detail_parts = [f"Submitted {submitted}"]
                         if email:
                             detail_parts.append(f"notify {email}")
@@ -225,17 +244,17 @@ def main_page():
 
 
     # ── Tour ─────────────────────────────────────────────────────────────────
-    # Fire once for first-time users; the "?" header button lets anyone replay.
-    async def _maybe_tour():
-        tour_key = f"tour_shown_{user['id']}"
-        if app.storage.user.get(tour_key):
-            return
-        app.storage.user[tour_key] = True
-        client = ui.context.client  # capture before yielding context
-        await asyncio.sleep(1.2)  # let the page fully render first
-        _launch_tour(client)
+    # tour_shown is stored per-user in the database so it survives server
+    # restarts, logouts, and different browsers.
+    if not user.get("tour_shown"):
+        mark_tour_shown(user["id"])
 
-    ui.timer(0, _maybe_tour, once=True)
+        async def _launch_tour_delayed():
+            client = ui.context.client
+            await asyncio.sleep(1.2)
+            _launch_tour(client)
+
+        ui.timer(0, _launch_tour_delayed, once=True)
 
 
 @ui.page("/history")
@@ -320,6 +339,96 @@ def history_page():
                             f"v{version['version_number']} · {version['reason']} · "
                             f"{created_at} · {product_name}"
                         ).classes("text-xs text-gray-400")
+
+
+@ui.page("/catalog")
+def catalog_page():
+    user = require_user()
+    if not user:
+        return
+
+    ui.dark_mode().enable()
+    ui.colors(
+        primary="#6366f1",
+        secondary="#818cf8",
+        positive="#10b981",
+        negative="#ef4444",
+        warning="#f59e0b",
+    )
+    ui.add_head_html(STYLES)
+    render_header()
+
+    brands = list_brand_catalog()
+
+    with ui.column().classes("w-full px-6 py-5 gap-5"):
+        with ui.row().classes("w-full items-center justify-between"):
+            with ui.column().classes("gap-1"):
+                ui.label("Brand Catalog").style(
+                    "font-size:20px; font-weight:600; color:#e2e8f0;"
+                    "font-family:Inter,sans-serif; letter-spacing:-0.3px;"
+                )
+                ui.label(
+                    f"{len(brands)} brand{'s' if len(brands) != 1 else ''} learned from your extractions"
+                ).style("font-size:13px; color:#475569; font-family:Inter,sans-serif;")
+            ui.button(
+                "Back to workspace", icon="arrow_back",
+                on_click=lambda: ui.navigate.to("/"),
+            ).props("flat color=white").classes("text-xs")
+
+        if not brands:
+            with ui.column().classes("w-full items-center py-16 gap-3"):
+                ui.icon("auto_awesome", size="2.5rem").style("color:rgba(99,102,241,0.3)")
+                ui.label("No brands yet").style(
+                    "font-size:15px; color:#475569; font-family:Inter,sans-serif;"
+                )
+                ui.label(
+                    "Upload and extract products -- every brand you process is cataloged here."
+                ).style("font-size:13px; color:#334155; font-family:Inter,sans-serif;")
+        else:
+            # Table header
+            with ui.row().classes("w-full px-4 py-2 gap-0").style(
+                "border-bottom:1px solid rgba(255,255,255,0.06);"
+            ):
+                for label, width in [
+                    ("Brand", "25%"), ("Manufacturer", "20%"), ("Category", "15%"),
+                    ("Country", "15%"), ("Packaging", "12%"), ("Products", "13%"),
+                ]:
+                    ui.label(label).style(
+                        f"width:{width}; font-size:11px; font-weight:600; color:#475569;"
+                        "text-transform:uppercase; letter-spacing:0.4px;"
+                        "font-family:Inter,sans-serif;"
+                    )
+
+            for brand in brands:
+                with ui.row().classes("w-full px-4 py-3 gap-0 items-center catalog-row").style(
+                    "border-bottom:1px solid rgba(255,255,255,0.04);"
+                ):
+                    ui.label(brand["brand"] or "").style(
+                        "width:25%; font-size:13px; font-weight:500; color:#e2e8f0;"
+                        "font-family:Inter,sans-serif;"
+                    )
+                    ui.label(brand.get("manufacturer") or "--").style(
+                        "width:20%; font-size:12px; color:#94a3b8;"
+                        "font-family:Inter,sans-serif;"
+                    )
+                    ui.label(brand.get("category_type") or "--").style(
+                        "width:15%; font-size:12px; color:#94a3b8;"
+                        "font-family:Inter,sans-serif;"
+                    )
+                    ui.label(brand.get("country_of_origin") or "--").style(
+                        "width:15%; font-size:12px; color:#94a3b8;"
+                        "font-family:Inter,sans-serif;"
+                    )
+                    ui.label(brand.get("packaging_type") or "--").style(
+                        "width:12%; font-size:12px; color:#94a3b8;"
+                        "font-family:Inter,sans-serif;"
+                    )
+                    count = brand.get("product_count", 0)
+                    ui.html(
+                        f'<span style="width:13%; font-size:12px; font-weight:600;'
+                        f' color:#818cf8; font-family:Inter,sans-serif;">'
+                        f'{count} product{"s" if count != 1 else ""}</span>'
+                    )
 
 
 if __name__ in {"__main__", "__mp_main__"}:

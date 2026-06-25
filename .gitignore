@@ -13,3 +13,6 @@ imdb_images/
 .DS_Store
 eval/eval_from_org.xlsx
 batch_results_*.jsonl
+
+scripts/
+demo_data/*

@@ -40,6 +40,8 @@ class VLMCallParams(BaseModel):
     # When set, Ollama enforces this JSON schema on the response, eliminating
     # parse failures. llama3.2-vision supports this; not all models do.
     format_schema: dict | None = Field(default=None)
+    # Override the model name for this request (None = use module default).
+    model_override: str | None = Field(default=None)
 
 
 # ── Compat wrapper returned by vlm_call_w_ollama ───────────────────────────
@@ -59,6 +61,8 @@ class _NativeChoice:
 @dataclass
 class _NativeResponse:
     choices: list
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 async def vlm_call_w_ollama(params: VLMCallParams) -> _NativeResponse:
@@ -71,9 +75,10 @@ async def vlm_call_w_ollama(params: VLMCallParams) -> _NativeResponse:
     Returns a _NativeResponse whose shape matches OpenAI ChatCompletion so the
     rest of the pipeline can treat both interchangeably.
     """
+    _model = params.model_override or MODEL
     print(
         f"[vlm call] sending request to ollama (native) for "
-        f"{params.description}... {MODEL} in use....."
+        f"{params.description}... {_model} in use....."
     )
 
     # Build the message: interleave path labels and base64 images so the model
@@ -86,7 +91,7 @@ async def vlm_call_w_ollama(params: VLMCallParams) -> _NativeResponse:
     text_parts.append(params.user_prompt)
 
     payload: dict = {
-        "model": MODEL,
+        "model": _model,
         "messages": [
             {"role": "system", "content": params.system_prompt},
             {"role": "user", "content": "\n\n".join(text_parts), "images": images},
@@ -113,8 +118,14 @@ async def vlm_call_w_ollama(params: VLMCallParams) -> _NativeResponse:
 
     msg = data.get("message", {})
     content = msg.get("content", "")
+    prompt_eval = data.get("prompt_eval_count", 0) or 0
+    eval_count = data.get("eval_count", 0) or 0
     print(f"[vlm call] got response from ollama (native) | content_len={len(content)}")
-    return _NativeResponse(choices=[_NativeChoice(message=_NativeMessage(content=content))])
+    return _NativeResponse(
+        choices=[_NativeChoice(message=_NativeMessage(content=content))],
+        input_tokens=prompt_eval,
+        output_tokens=eval_count,
+    )
 
 
 async def vlm_call_w_openai(params: VLMCallParams) -> _NativeResponse:
@@ -123,9 +134,10 @@ async def vlm_call_w_openai(params: VLMCallParams) -> _NativeResponse:
     Images are sent as base64 data-URLs. Returns the same _NativeResponse
     shape as vlm_call_w_ollama so the rest of the pipeline is unchanged.
     """
+    _model = params.model_override or OPENAI_MODEL
     print(
         f"[vlm call] sending request to openai for "
-        f"{params.description}... {OPENAI_MODEL} in use....."
+        f"{params.description}... {_model} in use....."
     )
 
     # Build a content array with interleaved image labels and base64 images.
@@ -150,9 +162,9 @@ async def vlm_call_w_openai(params: VLMCallParams) -> _NativeResponse:
     ]
 
     kwargs: dict = {
-        "model":                 OPENAI_MODEL,
+        "model":                 _model,
         "messages":              messages,
-        "max_completion_tokens": 4096,
+        "max_completion_tokens": 16384,
     }
 
     if params.format_schema:
@@ -163,17 +175,23 @@ async def vlm_call_w_openai(params: VLMCallParams) -> _NativeResponse:
 
     content_out = response.choices[0].message.content or ""
     usage = response.usage
+    in_tok = usage.prompt_tokens if usage else 0
+    out_tok = usage.completion_tokens if usage else 0
     if usage:
         print(
             f"[vlm call] got response from openai | "
-            f"prompt_tokens={usage.prompt_tokens} "
-            f"completion_tokens={usage.completion_tokens} "
+            f"prompt_tokens={in_tok} "
+            f"completion_tokens={out_tok} "
             f"total_tokens={usage.total_tokens} | "
             f"content_len={len(content_out)}"
         )
     else:
         print(f"[vlm call] got response from openai | content_len={len(content_out)}")
-    return _NativeResponse(choices=[_NativeChoice(message=_NativeMessage(content=content_out))])
+    return _NativeResponse(
+        choices=[_NativeChoice(message=_NativeMessage(content=content_out))],
+        input_tokens=in_tok,
+        output_tokens=out_tok,
+    )
 
 
 async def vlm_call_w_gemini(params: VLMCallParams) -> _NativeResponse:
@@ -182,9 +200,10 @@ async def vlm_call_w_gemini(params: VLMCallParams) -> _NativeResponse:
     Google exposes an OpenAI-format endpoint so we can reuse the same client
     and message structure without adding extra dependencies.
     """
+    _model = params.model_override or GEMINI_MODEL
     print(
         f"[vlm call] sending request to gemini for "
-        f"{params.description}... {GEMINI_MODEL} in use....."
+        f"{params.description}... {_model} in use....."
     )
 
     content: list[dict] = []
@@ -207,7 +226,7 @@ async def vlm_call_w_gemini(params: VLMCallParams) -> _NativeResponse:
     ]
 
     kwargs: dict = {
-        "model":      GEMINI_MODEL,
+        "model":      _model,
         "messages":   messages,
         "max_tokens": 4096,
     }
@@ -223,17 +242,23 @@ async def vlm_call_w_gemini(params: VLMCallParams) -> _NativeResponse:
 
     content_out = response.choices[0].message.content or ""
     usage = response.usage
+    in_tok = usage.prompt_tokens if usage else 0
+    out_tok = usage.completion_tokens if usage else 0
     if usage:
         print(
             f"[vlm call] got response from gemini | "
-            f"prompt_tokens={usage.prompt_tokens} "
-            f"completion_tokens={usage.completion_tokens} "
+            f"prompt_tokens={in_tok} "
+            f"completion_tokens={out_tok} "
             f"total_tokens={usage.total_tokens} | "
             f"content_len={len(content_out)}"
         )
     else:
         print(f"[vlm call] got response from gemini | content_len={len(content_out)}")
-    return _NativeResponse(choices=[_NativeChoice(message=_NativeMessage(content=content_out))])
+    return _NativeResponse(
+        choices=[_NativeChoice(message=_NativeMessage(content=content_out))],
+        input_tokens=in_tok,
+        output_tokens=out_tok,
+    )
 
 
 async def vlm_call_w_anthropic(params: VLMCallParams) -> _NativeResponse:
@@ -243,9 +268,10 @@ async def vlm_call_w_anthropic(params: VLMCallParams) -> _NativeResponse:
     The system prompt is passed as the top-level `system` parameter (Anthropic's
     preferred placement, rather than a system-role message).
     """
+    _model = params.model_override or ANTHROPIC_MODEL
     print(
         f"[vlm call] sending request to anthropic for "
-        f"{params.description}... {ANTHROPIC_MODEL} in use....."
+        f"{params.description}... {_model} in use....."
     )
 
     content: list[dict] = []
@@ -266,7 +292,7 @@ async def vlm_call_w_anthropic(params: VLMCallParams) -> _NativeResponse:
 
     client = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
     response = await client.messages.create(
-        model=ANTHROPIC_MODEL,
+        model=_model,
         max_tokens=4096,
         system=params.system_prompt,
         messages=[{"role": "user", "content": content}],
@@ -280,7 +306,11 @@ async def vlm_call_w_anthropic(params: VLMCallParams) -> _NativeResponse:
         f"output_tokens={usage.output_tokens} | "
         f"content_len={len(content_out)}"
     )
-    return _NativeResponse(choices=[_NativeChoice(message=_NativeMessage(content=content_out))])
+    return _NativeResponse(
+        choices=[_NativeChoice(message=_NativeMessage(content=content_out))],
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+    )
 
 
 def _encode_pil_image(image: Image.Image, format: str = "JPEG") -> str:

@@ -22,12 +22,18 @@ class PipelineResult:
         duplicate_suggestions: list[dict],
         image_path: str,
         image_paths: list[str] | None = None,
+        cost_usd: float = 0.0,
+        model_used: str = "",
+        barcode_audit: dict | None = None,
     ):
         self.record = record
         self.normalized_fields = normalized_fields
         self.duplicate_suggestions = duplicate_suggestions
         self.image_path = image_path                        # primary image (thumbnail)
         self.image_paths: list[str] = image_paths or [image_path]  # all grouped images
+        self.cost_usd = cost_usd
+        self.model_used = model_used
+        self.barcode_audit = barcode_audit
 
     @property
     def low_confidence_fields(self) -> list[str]:
@@ -66,6 +72,7 @@ class PipelineResult:
 async def run_pipeline(
     image_paths: list[str] | list[Path],
     existing_records: list[dict] | None = None,
+    model_display_name: str | None = None,
 ) -> list[PipelineResult]:
     """Run the full extraction pipeline on a list of product images.
 
@@ -136,12 +143,12 @@ async def run_pipeline(
         ]
 
     print("[pipeline] Extracting from uploaded images...")
-    extracted_products: list[tuple[IMDBRecordWithConfidence, list[str]]] = (
-        await extract_information_from_images(verified_paths)
+    extracted_products: list[tuple[IMDBRecordWithConfidence, list[str], float, str, dict | None]] = (
+        await extract_information_from_images(verified_paths, model_display_name=model_display_name)
     )
 
     pipeline_results: list[PipelineResult] = []
-    for record, group_paths in extracted_products:
+    for record, group_paths, cost_usd, model_used, barcode_audit in extracted_products:
         print("[pipeline] Normalizing fields...")
         record, normalized_fields = normalize_record(record)
 
@@ -158,7 +165,8 @@ async def run_pipeline(
             f"[pipeline] Done. "
             f"Low confidence fields: {record.get_low_confidence_fields()} | "
             f"Normalized: {normalized_fields} | "
-            f"Duplicates found: {len(duplicates)}"
+            f"Duplicates found: {len(duplicates)} | "
+            f"Cost: ${cost_usd:.6f}"
         )
         pipeline_results.append(
             PipelineResult(
@@ -167,6 +175,9 @@ async def run_pipeline(
                 duplicate_suggestions=duplicates,
                 image_path=str(group_paths[0] if group_paths else verified_paths[0]),
                 image_paths=[str(p) for p in group_paths] if group_paths else [str(verified_paths[0])],
+                cost_usd=cost_usd,
+                model_used=model_used,
+                barcode_audit=barcode_audit,
             )
         )
 

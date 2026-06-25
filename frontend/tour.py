@@ -65,6 +65,31 @@ TOUR_JS = """
         },
       },
       {
+        element: '.video-tab',
+        popover: {
+          title: 'Video input',
+          description:
+            'Switch to <strong>Video</strong> to upload a short product recording instead of images. ' +
+            'The system samples one frame per second, scores each frame for sharpness, ' +
+            'and sends the clearest ones to the AI — so a quick phone scan is all you need.',
+          side: 'bottom',
+          align: 'start',
+        },
+      },
+      {
+        element: '.model-selector',
+        popover: {
+          title: 'Choose your AI model',
+          description:
+            'Select the AI provider for extraction — ' +
+            '<strong>Claude Sonnet 4.6</strong> is recommended for best accuracy. ' +
+            'Each model has a different cost per image, visible via the ' +
+            '<strong>info</strong> icon next to this selector.',
+          side: 'bottom',
+          align: 'end',
+        },
+      },
+      {
         element: '.bulk-batch-tab',
         popover: {
           title: 'Bulk Batch — process hundreds at once',
