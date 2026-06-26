@@ -84,6 +84,7 @@ def _render_batch_jobs_section(user_id: int) -> None:
 
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
     _last_statuses: dict[int, str] = {}
+    collapsed = {"v": False}  # survives refreshes
 
     @ui.refreshable
     def _jobs_cards() -> None:
@@ -104,18 +105,17 @@ def _render_batch_jobs_section(user_id: int) -> None:
             return
 
         # ── Header row: label + collapse toggle ───────────────────────────────
-        collapsed = {"v": False}
-
         with ui.row().classes("w-full items-center justify-between"):
             ui.label("Batch Jobs").style(
                 "color:#475569; font-size:11px; font-weight:600; letter-spacing:0.5px;"
                 "text-transform:uppercase; font-family:Inter,sans-serif"
             )
-            toggle_btn = ui.button(icon="expand_less").props(
-                "flat round dense"
-            ).style("color:#334155; opacity:0.6")
+            toggle_btn = ui.button(
+                icon="expand_more" if collapsed["v"] else "expand_less"
+            ).props("flat round dense").style("color:#334155; opacity:0.6")
 
         jobs_list = ui.column().classes("w-full gap-2")
+        jobs_list.set_visibility(not collapsed["v"])
 
         def _toggle():
             collapsed["v"] = not collapsed["v"]
