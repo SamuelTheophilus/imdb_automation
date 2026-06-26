@@ -171,10 +171,16 @@ async def _notify(job: dict, result_count: int) -> None:
     email = job.get("notify_email") or ""
     if not email:
         return
-    user = get_user_by_id(job["user_id"])
+    user = await asyncio.to_thread(get_user_by_id, job["user_id"])
     try:
         from backend.email_service import send_batch_complete
-        send_batch_complete(email, (user or {}).get("username", "User"), result_count, job["id"])
+        await asyncio.to_thread(
+            send_batch_complete,
+            email,
+            (user or {}).get("username", "User"),
+            result_count,
+            job["id"],
+        )
         log.info("[batch] email sent to %s", email)
     except Exception as exc:
         log.warning("[batch] email failed: %s", exc)

@@ -89,18 +89,6 @@ def _render_batch_jobs_section(user_id: int) -> None:
     @ui.refreshable
     def _jobs_cards() -> None:
         fresh = [j for j in list_batch_jobs(user_id) if j["submitted_at"] >= cutoff]
-
-        # Detect jobs that just completed and reload the grid
-        for job in fresh:
-            prev = _last_statuses.get(job["id"])
-            if prev == "pending" and job["status"] == "completed":
-                from frontend.state import reapply_source_filter
-                saved = list_user_extractions(user_id)
-                row_data.clear()
-                row_data.extend(db_record_to_row(r, i) for i, r in enumerate(saved))
-                reapply_source_filter()
-            _last_statuses[job["id"]] = job["status"]
-
         if not fresh:
             return
 
@@ -200,9 +188,25 @@ def _render_batch_jobs_section(user_id: int) -> None:
                             "flat round dense"
                         ).style("color:#334155; opacity:0.5; flex-shrink:0").tooltip("Clear")
 
+    async def _on_timer() -> None:
+        import asyncio as _asyncio
+        fresh = await _asyncio.to_thread(
+            lambda: [j for j in list_batch_jobs(user_id) if j["submitted_at"] >= cutoff]
+        )
+        for job in fresh:
+            prev = _last_statuses.get(job["id"])
+            if prev == "pending" and job["status"] == "completed":
+                from frontend.state import reapply_source_filter
+                saved = await _asyncio.to_thread(list_user_extractions, user_id)
+                row_data.clear()
+                row_data.extend(db_record_to_row(r, i) for i, r in enumerate(saved))
+                reapply_source_filter()
+            _last_statuses[job["id"]] = job["status"]
+        _jobs_cards.refresh()
+
     _jobs_cards()
     set_batch_jobs_refresh(_jobs_cards.refresh)
-    ui.timer(10, _jobs_cards.refresh)
+    ui.timer(10, _on_timer)
 
 
 
