@@ -172,6 +172,7 @@ def persist_row_edits(row: dict) -> None:
     """Save edited grid/drawer values back to SQLite when a row has a db id."""
     extraction_id = row.get("db_id")
     if not extraction_id:
+        logging.warning("[persist_row_edits] skipped: row id=%s has no db_id (keys=%s)", row.get("id"), list(row.keys()))
         return
     update_extraction_fields(
         int(extraction_id),

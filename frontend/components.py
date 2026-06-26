@@ -1100,6 +1100,10 @@ def save_review_drawer():
         if row["id"] != review_row_id:
             continue
 
+        if not row.get("db_id"):
+            ui.notify("Cannot save: record not linked to database", type="warning", position="center")
+            return
+
         for key, _ in FIELDS:
             row[key] = review_inputs[key].value or ""
 
@@ -2220,8 +2224,13 @@ def render_grid():
         updated = e.args["data"]
         for i, row in enumerate(row_data):
             if row["id"] == updated["id"]:
-                row_data[i] = updated
-                persist_row_edits(updated)
+                # Merge only editable field values — do NOT replace the whole dict,
+                # as the AG Grid event data may not round-trip non-column fields
+                # such as db_id, _source, _batch_id, etc.
+                for key, _ in FIELDS:
+                    if key in updated:
+                        row[key] = updated[key]
+                persist_row_edits(row)
                 break
 
     def on_cell_click(e):
