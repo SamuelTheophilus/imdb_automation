@@ -413,7 +413,7 @@ def toggle_status_from_drawer() -> None:
         return
 
     for row in row_data:
-        if row["id"] != review_row_id:
+        if row.get("db_id") != review_row_id:
             continue
 
         new_status = "warn" if row.get("_status") == "ok" else "ok"
@@ -764,7 +764,7 @@ def open_review_drawer(row: dict):
     if review_drawer is None:
         return
 
-    review_row_id = row["id"]
+    review_row_id = row.get("db_id")  # stable DB id — survives row_data rebuilds
 
     product = row.get("product_name") or "Review extraction"
     brand = row.get("brand", "")
@@ -1063,7 +1063,7 @@ def _remove_image_from_group(path_to_remove: str) -> None:
     if review_row_id is None:
         return
 
-    row = next((r for r in row_data if r["id"] == review_row_id), None)
+    row = next((r for r in row_data if r.get("db_id") == review_row_id), None)
     if not row:
         return
 
@@ -1097,7 +1097,7 @@ def save_review_drawer():
         return
 
     for row in row_data:
-        if row["id"] != review_row_id:
+        if row.get("db_id") != review_row_id:
             continue
 
         if not row.get("db_id"):
@@ -1119,7 +1119,7 @@ async def delete_from_review_drawer():
     if review_row_id is None:
         return
 
-    row_to_delete = next((r for r in row_data if r["id"] == review_row_id), None)
+    row_to_delete = next((r for r in row_data if r.get("db_id") == review_row_id), None)
     if not row_to_delete:
         return
 
@@ -1141,7 +1141,7 @@ async def delete_from_review_drawer():
         return
 
     do_delete_row(row_to_delete)
-    row_data[:] = [r for r in row_data if r["id"] != review_row_id]
+    row_data[:] = [r for r in row_data if r.get("db_id") != review_row_id]
 
     reapply_source_filter()
 
