@@ -125,23 +125,35 @@ def _export_filename(ext: str) -> str:
     return f"predictions.{ext}"
 
 
-def do_export_csv():
-    if not row_data:
-        ui.notify("No data to export yet", type="warning", position="center")
+_EXPORT_OK_STATUSES = {"ok", "duplicate", "warn"}
+
+
+def _rows_for_export(scope: str) -> list[dict]:
+    if scope == "ok":
+        return [r for r in row_data if r.get("_status") == "ok"]
+    return [r for r in row_data if r.get("_status") in _EXPORT_OK_STATUSES]
+
+
+def do_export_csv(scope: str = "all"):
+    rows = _rows_for_export(scope)
+    if not rows:
+        ui.notify("No data to export", type="warning", position="center")
         return
-    df = pd.DataFrame([row_to_export_dict(row) for row in row_data])
+    df = pd.DataFrame([row_to_export_dict(row) for row in rows])
     path = Path("data") / _export_filename("csv")
     path.parent.mkdir(exist_ok=True)
     df.to_csv(path, index=False)
     ui.download(str(path))
-    ui.notify("CSV exported", type="positive", position="center")
+    label = "approved" if scope == "ok" else "all reviewed"
+    ui.notify(f"CSV exported ({label}, {len(rows)} rows)", type="positive", position="center")
 
 
-def do_export_excel():
-    if not row_data:
-        ui.notify("No data to export yet", type="warning", position="center")
+def do_export_excel(scope: str = "all"):
+    rows = _rows_for_export(scope)
+    if not rows:
+        ui.notify("No data to export", type="warning", position="center")
         return
-    df = pd.DataFrame([row_to_export_dict(row) for row in row_data])
+    df = pd.DataFrame([row_to_export_dict(row) for row in rows])
     path = Path("data") / _export_filename("xlsx")
     path.parent.mkdir(exist_ok=True)
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
@@ -152,7 +164,8 @@ def do_export_excel():
         for cell in ws[1]:
             cell.font = bold
     ui.download(str(path))
-    ui.notify("Excel exported", type="positive", position="center")
+    label = "approved" if scope == "ok" else "all reviewed"
+    ui.notify(f"Excel exported ({label}, {len(rows)} rows)", type="positive", position="center")
 
 
 def persist_row_edits(row: dict) -> None:

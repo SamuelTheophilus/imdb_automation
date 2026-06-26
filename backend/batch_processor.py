@@ -228,8 +228,10 @@ async def _process_anthropic(job: dict) -> None:
             log.warning("[batch:anthropic] request %s: %s", result.custom_id, result.result.type)
             raw[result.custom_id] = ""
     model_id = _model_id_for_provider("anthropic")
-    results, n_skip, names = _build_results(request_map, raw, token_usage, model_id, user_id=job["user_id"])
-    _persist_results(job, results, n_skip, names)
+    results, n_skip, names = await asyncio.to_thread(
+        _build_results, request_map, raw, token_usage, model_id, job["user_id"]
+    )
+    await asyncio.to_thread(_persist_results, job, results, n_skip, names)
     await _notify(job, len(results))
 
 
@@ -321,8 +323,10 @@ async def _process_openai_batch(job: dict) -> None:
         except (KeyError, TypeError):
             pass
     model_id = _model_id_for_provider("openai")
-    results, n_skip, names = _build_results(request_map, raw, token_usage, model_id, user_id=job["user_id"])
-    _persist_results(job, results, n_skip, names)
+    results, n_skip, names = await asyncio.to_thread(
+        _build_results, request_map, raw, token_usage, model_id, job["user_id"]
+    )
+    await asyncio.to_thread(_persist_results, job, results, n_skip, names)
     await _notify(job, len(results))
 
 
@@ -397,8 +401,10 @@ async def _run_gemini_inline(job: dict, sub_batches: list[list[Path]], model: st
 
     request_map = json.loads(job["request_map_json"])
     model_id = _model_id_for_provider("gemini")
-    results, n_skip, names = _build_results(request_map, raw, token_usage, model_id, user_id=job["user_id"])
-    _persist_results(job, results, n_skip, names)
+    results, n_skip, names = await asyncio.to_thread(
+        _build_results, request_map, raw, token_usage, model_id, job["user_id"]
+    )
+    await asyncio.to_thread(_persist_results, job, results, n_skip, names)
     await _notify(job, len(results))
 
 

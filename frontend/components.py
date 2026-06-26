@@ -11,7 +11,6 @@ from backend.db import (
 )
 from backend.extractor import MODEL_OPTIONS
 from frontend.auth_pages import current_user, logout, render_change_password_dialog
-from frontend.tour import TOUR_JS, TOUR_SAMPLE_ROW
 from frontend.handlers import (
     QUICK_UPLOAD_LIMIT,
     do_delete_row,
@@ -22,8 +21,20 @@ from frontend.handlers import (
     persist_row_edits,
     stage_bulk_files,
 )
-
-from frontend.state import FIELDS, build_column_defs, get_client_model, get_grid, image_to_url, reapply_source_filter, row_data, set_active_source, set_client_model, set_grid, set_grid_source_filter
+from frontend.state import (
+    FIELDS,
+    build_column_defs,
+    get_client_model,
+    get_grid,
+    image_to_url,
+    reapply_source_filter,
+    row_data,
+    set_active_source,
+    set_client_model,
+    set_grid,
+    set_grid_source_filter,
+)
+from frontend.tour import TOUR_JS, TOUR_SAMPLE_ROW
 
 review_drawer = None
 review_carousel_container = None
@@ -31,7 +42,7 @@ review_title = None
 review_subtitle = None
 review_inputs: dict[str, ui.input] = {}
 review_row_id: int | None = None
-review_status_btn = None      # toggles between Mark OK / Needs review
+review_status_btn = None  # toggles between Mark OK / Needs review
 
 # Tracks which carousel slide is currently visible so the "Delete image"
 # button always targets the right image regardless of navigation.
@@ -45,6 +56,7 @@ def _on_slide_change(e) -> None:
         _current_slide_index = int(e.value.split("-")[1])
     except Exception:
         pass
+
 
 # ── Processing toast ─────────────────────────────────────────────────────────
 # Injected as plain HTML+JS so ui.run_javascript() reliably updates it from
@@ -159,6 +171,7 @@ def render_processing_overlay() -> None:
 
 def show_processing(message: str = "Processing…") -> None:
     import json
+
     ui.run_javascript(f"_procShow({json.dumps(message)})")
 
 
@@ -168,9 +181,11 @@ def hide_processing() -> None:
 
 # ── Tour ─────────────────────────────────────────────────────────────────────
 
+
 def _launch_tour(client=None) -> None:
     """Used by the first-time tour (called from an already-async context)."""
     import asyncio
+
     if client is None:
         client = ui.context.client
     open_review_drawer(TOUR_SAMPLE_ROW)
@@ -185,6 +200,7 @@ def _launch_tour(client=None) -> None:
 async def _replay_tour() -> None:
     """Replay button handler — async so NiceGUI flushes the drawer before the JS fires."""
     import asyncio
+
     client = ui.context.client
     open_review_drawer(TOUR_SAMPLE_ROW)
     await asyncio.sleep(0.7)
@@ -192,6 +208,7 @@ async def _replay_tour() -> None:
 
 
 # ── Header ───────────────────────────────────────────────────────────────────
+
 
 def render_header():
     with (
@@ -214,31 +231,47 @@ def render_header():
                 ui.label(user["username"]).style(
                     "font-size:12px; color:#334155; padding:0 10px 0 4px"
                 )
-                ui.separator().props("vertical").style("height:16px; opacity:0.15; margin: 0 4px")
+                ui.separator().props("vertical").style(
+                    "height:16px; opacity:0.15; margin: 0 4px"
+                )
                 ui.button(
-                    "History", icon="history",
+                    "History",
+                    icon="history",
                     on_click=lambda: ui.navigate.to("/history"),
                 ).props("flat color=white").classes("text-xs")
                 ui.button(
-                    "Catalog", icon="auto_awesome",
+                    "Catalog",
+                    icon="auto_awesome",
                     on_click=lambda: ui.navigate.to("/catalog"),
                 ).props("flat color=white").classes("text-xs")
                 ui.button(icon="help_outline", on_click=_replay_tour).props(
                     "flat round dense color=white"
                 ).style("opacity:0.4").tooltip("Take the tour")
-            ui.button("Export CSV", icon="download", on_click=do_export_csv).props(
-                "flat color=white"
-            ).classes("text-xs")
-            ui.button("Export Excel", icon="table_chart", on_click=do_export_excel).props(
-                "flat color=white"
-            ).classes("text-xs")
-            ui.separator().props("vertical").style("height:16px; opacity:0.15; margin: 0 4px")
+            with (
+                ui.dropdown_button("Export CSV", icon="download", auto_close=True)
+                .props("flat color=white no-caps")
+                .classes("text-xs")
+            ):
+                ui.item("Approved only", on_click=lambda: do_export_csv("ok"))
+                ui.item("All", on_click=lambda: do_export_csv("all"))
+            with (
+                ui.dropdown_button("Export Excel", icon="table_chart", auto_close=True)
+                .props("flat color=white no-caps")
+                .classes("text-xs")
+            ):
+                ui.item("Approved only", on_click=lambda: do_export_excel("ok"))
+                ui.item("All", on_click=lambda: do_export_excel("all"))
+            ui.separator().props("vertical").style(
+                "height:16px; opacity:0.15; margin: 0 4px"
+            )
             if user:
                 pw_dialog = render_change_password_dialog()
                 ui.button(icon="lock_reset", on_click=pw_dialog.open).props(
                     "flat round dense color=white"
                 ).style("opacity:0.5").tooltip("Change password")
-                ui.separator().props("vertical").style("height:16px; opacity:0.15; margin: 0 4px")
+                ui.separator().props("vertical").style(
+                    "height:16px; opacity:0.15; margin: 0 4px"
+                )
             ui.button("Log out", icon="logout", on_click=logout).props(
                 "flat color=white"
             ).classes("text-xs")
@@ -248,13 +281,20 @@ def render_header():
 
 # ── Review drawer ────────────────────────────────────────────────────────────
 
+
 def render_review_drawer():
     """Create the right-side row editor. Opens via `open_review_drawer`.
 
     Carousel at top for all product angles, then grouped field inputs, then
     action buttons. Per-slide delete lets users remove a mis-grouped image.
     """
-    global review_drawer, review_carousel_container, review_title, review_subtitle, review_inputs, review_status_btn
+    global \
+        review_drawer, \
+        review_carousel_container, \
+        review_title, \
+        review_subtitle, \
+        review_inputs, \
+        review_status_btn
 
     review_inputs = {}
     review_drawer = (
@@ -270,9 +310,13 @@ def render_review_drawer():
             .style("border-bottom: 1px solid rgba(240,225,205,0.07)")
         ):
             with ui.column().classes("gap-0.5 flex-1 min-w-0"):
-                review_title = ui.label("Review extraction").classes(
-                    "text-sm font-semibold"
-                ).style("color:#e2e8f0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis")
+                review_title = (
+                    ui.label("Review extraction")
+                    .classes("text-sm font-semibold")
+                    .style(
+                        "color:#e2e8f0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis"
+                    )
+                )
                 review_subtitle = ui.label("").classes("text-xs").style("color:#475569")
 
             ui.button(icon="close", on_click=review_drawer.hide).props(
@@ -283,8 +327,11 @@ def render_review_drawer():
         review_carousel_container = ui.column().classes("w-full p-0 gap-0")
 
         # Field groups
-        with ui.column().classes("w-full gap-0 px-5 pt-3 pb-1").style("overflow-y:auto; flex:1"):
-
+        with (
+            ui.column()
+            .classes("w-full gap-0 px-5 pt-3 pb-1")
+            .style("overflow-y:auto; flex:1")
+        ):
             # Identification
             ui.label("Identification").classes("drawer-section-label")
             with ui.row().classes("w-full gap-2"):
@@ -303,15 +350,23 @@ def render_review_drawer():
             ui.separator().classes("my-2 opacity-0")
             ui.label("Attributes").classes("drawer-section-label")
             with ui.row().classes("w-full gap-2"):
-                review_inputs["country_of_origin"] = ui.input("Country").classes("flex-1")
-                review_inputs["packaging_type"] = ui.input("Packaging").classes("flex-1")
+                review_inputs["country_of_origin"] = ui.input("Country").classes(
+                    "flex-1"
+                )
+                review_inputs["packaging_type"] = ui.input("Packaging").classes(
+                    "flex-1"
+                )
             with ui.row().classes("w-full gap-2"):
                 review_inputs["variant"] = ui.input("Variant").classes("flex-1")
-                review_inputs["fragrance_flavor"] = ui.input("Fragrance / Flavor").classes("flex-1")
+                review_inputs["fragrance_flavor"] = ui.input(
+                    "Fragrance / Flavor"
+                ).classes("flex-1")
 
             ui.separator().classes("my-2 opacity-0")
             ui.label("Marketing").classes("drawer-section-label")
-            review_inputs["promotional_messages"] = ui.input("Promotion").classes("w-full")
+            review_inputs["promotional_messages"] = ui.input("Promotion").classes(
+                "w-full"
+            )
             review_inputs["addons"] = ui.input("Add-ons").classes("w-full")
             review_inputs["tagline"] = ui.input("Tagline").classes("w-full")
 
@@ -319,20 +374,24 @@ def render_review_drawer():
         with (
             ui.row()
             .classes("w-full items-center justify-between px-5")
-            .style("border-top:1px solid rgba(240,225,205,0.07); min-height:56px; flex-shrink:0")
+            .style(
+                "border-top:1px solid rgba(240,225,205,0.07); min-height:56px; flex-shrink:0"
+            )
         ):
             ui.button(icon="delete_outline", on_click=delete_from_review_drawer).props(
                 "flat round dense color=grey-7"
             )
             with ui.row().classes("gap-2 items-center"):
-                review_status_btn = ui.button(
-                    "Mark OK", on_click=toggle_status_from_drawer
-                ).props("flat dense color=positive").style(
-                    "font-size:12px; font-weight:500; padding:0 12px"
+                review_status_btn = (
+                    ui.button("Mark OK", on_click=toggle_status_from_drawer)
+                    .props("flat dense color=positive")
+                    .style("font-size:12px; font-weight:500; padding:0 12px")
                 )
                 ui.button("Save", on_click=save_review_drawer).props(
                     "unelevated dense color=indigo-5"
-                ).style("font-size:12px; font-weight:600; padding:0 18px; min-width:80px; height:34px")
+                ).style(
+                    "font-size:12px; font-weight:600; padding:0 18px; min-width:80px; height:34px"
+                )
 
 
 def _sync_status_btn(status: str) -> None:
@@ -422,14 +481,18 @@ def _open_merge_dialog(current_row: dict, matched_db_id: int) -> None:
     the user override per field, then merges on confirmation.
     """
     import json as _json
-    from frontend.state import FIELDS, get_grid, row_data, image_to_url as _img_url
+
+    from frontend.state import FIELDS, get_grid, row_data
+    from frontend.state import image_to_url as _img_url
 
     primary_id = int(current_row["db_id"])
     primary_rec = get_extraction_by_id(primary_id)
     matched_rec = get_extraction_by_id(matched_db_id)
 
     if not primary_rec or not matched_rec:
-        ui.notify("One of the records no longer exists.", type="warning", position="center")
+        ui.notify(
+            "One of the records no longer exists.", type="warning", position="center"
+        )
         return
 
     primary_conf = _json.loads(primary_rec.get("confidence_json") or "{}")
@@ -465,35 +528,44 @@ def _open_merge_dialog(current_row: dict, matched_db_id: int) -> None:
     matched_urls = _get_image_urls(matched_rec)
 
     # ── UI ────────────────────────────────────────────────────────────────────
-    _CARD  = "background:#0d1117; border:1px solid rgba(255,255,255,0.08); border-radius:14px; padding:0; overflow:hidden; min-width:820px; max-width:920px;"
-    _HDR   = "border-bottom:1px solid rgba(255,255,255,0.06);"
+    _CARD = "background:#0d1117; border:1px solid rgba(255,255,255,0.08); border-radius:14px; padding:0; overflow:hidden; min-width:820px; max-width:920px;"
+    _HDR = "border-bottom:1px solid rgba(255,255,255,0.06);"
     _LABEL = "font-size:10px; font-weight:600; color:#475569; font-family:Inter,sans-serif; letter-spacing:0.5px; text-transform:uppercase;"
-    _CONF  = "font-size:10px; font-family:Inter,sans-serif; border-radius:4px; padding:1px 5px;"
+    _CONF = "font-size:10px; font-family:Inter,sans-serif; border-radius:4px; padding:1px 5px;"
 
     def _conf_badge(score: float) -> str:
         if score >= 0.8:
-            color = "rgba(16,185,129,0.15)"; text = "#10b981"
+            color = "rgba(16,185,129,0.15)"
+            text = "#10b981"
         elif score >= 0.6:
-            color = "rgba(245,158,11,0.15)"; text = "#f59e0b"
+            color = "rgba(245,158,11,0.15)"
+            text = "#f59e0b"
         else:
-            color = "rgba(100,116,139,0.15)"; text = "#64748b"
+            color = "rgba(100,116,139,0.15)"
+            text = "#64748b"
         return (
             f'<span style="background:{color}; color:{text}; {_CONF}">'
-            f'{score:.0%}</span>'
+            f"{score:.0%}</span>"
         )
 
     with ui.dialog() as dlg, ui.card().style(_CARD):
         # Header
-        with ui.row().classes("w-full items-center justify-between px-5 py-4").style(_HDR):
+        with (
+            ui.row()
+            .classes("w-full items-center justify-between px-5 py-4")
+            .style(_HDR)
+        ):
             with ui.column().classes("gap-0"):
                 ui.label("Merge Duplicate Records").style(
                     "font-size:15px; font-weight:700; color:#e2e8f0;"
                     "font-family:Inter,sans-serif;"
                 )
-                ui.label("Pick the best value for each field. Auto-suggestions are pre-selected.").style(
-                    "font-size:12px; color:#475569; font-family:Inter,sans-serif;"
-                )
-            ui.button(icon="close", on_click=dlg.close).props("flat round dense").style("color:#475569;")
+                ui.label(
+                    "Pick the best value for each field. Auto-suggestions are pre-selected."
+                ).style("font-size:12px; color:#475569; font-family:Inter,sans-serif;")
+            ui.button(icon="close", on_click=dlg.close).props("flat round dense").style(
+                "color:#475569;"
+            )
 
         # ── Image carousels ───────────────────────────────────────────────────
         def _build_carousel(urls: list[str], label: str) -> None:
@@ -506,37 +578,46 @@ def _open_merge_dialog(current_row: dict, matched_db_id: int) -> None:
                         "border-radius:8px; border:1px solid rgba(255,255,255,0.07);"
                     )
                     if len(urls) > 1:
-                        with ui.row().classes("w-full items-center justify-center gap-1").style("margin-top:2px;"):
+                        with (
+                            ui.row()
+                            .classes("w-full items-center justify-center gap-1")
+                            .style("margin-top:2px;")
+                        ):
                             counter = ui.label(f"1 / {len(urls)}").style(
                                 "font-size:10px; color:#475569; font-family:Inter,sans-serif;"
                                 " min-width:32px; text-align:center;"
                             )
+
                             def _prev(u=urls, i=idx, c=counter, el=img_el):
                                 i["v"] = (i["v"] - 1) % len(u)
                                 el.set_source(u[i["v"]])
-                                c.set_text(f"{i['v']+1} / {len(u)}")
+                                c.set_text(f"{i['v'] + 1} / {len(u)}")
+
                             def _next(u=urls, i=idx, c=counter, el=img_el):
                                 i["v"] = (i["v"] + 1) % len(u)
                                 el.set_source(u[i["v"]])
-                                c.set_text(f"{i['v']+1} / {len(u)}")
-                            ui.button(icon="chevron_left", on_click=_prev).props("flat round dense").style(
-                                "color:#475569; width:22px; height:22px; order:-1;"
-                            )
+                                c.set_text(f"{i['v'] + 1} / {len(u)}")
+
+                            ui.button(icon="chevron_left", on_click=_prev).props(
+                                "flat round dense"
+                            ).style("color:#475569; width:22px; height:22px; order:-1;")
                             counter  # noqa: position counter between arrows
-                            ui.button(icon="chevron_right", on_click=_next).props("flat round dense").style(
-                                "color:#475569; width:22px; height:22px;"
-                            )
+                            ui.button(icon="chevron_right", on_click=_next).props(
+                                "flat round dense"
+                            ).style("color:#475569; width:22px; height:22px;")
                 else:
                     ui.html(
                         '<div style="height:150px; display:flex; align-items:center;'
-                        ' justify-content:center; border-radius:8px;'
+                        " justify-content:center; border-radius:8px;"
                         ' border:1px solid rgba(255,255,255,0.06);">'
                         '<span style="font-size:11px; color:#334155; font-family:Inter,sans-serif;">No images</span>'
-                        '</div>'
+                        "</div>"
                     )
 
-        with ui.row().classes("w-full items-start gap-4 px-5 py-4").style(
-            "border-bottom:1px solid rgba(255,255,255,0.04);"
+        with (
+            ui.row()
+            .classes("w-full items-start gap-4 px-5 py-4")
+            .style("border-bottom:1px solid rgba(255,255,255,0.04);")
         ):
             _build_carousel(primary_urls, "This record")
             ui.element("div").style(
@@ -545,8 +626,12 @@ def _open_merge_dialog(current_row: dict, matched_db_id: int) -> None:
             _build_carousel(matched_urls, "Matched record")
 
         # Column headers
-        with ui.row().classes("w-full px-5 py-2 gap-0").style(
-            "background:rgba(255,255,255,0.02); border-bottom:1px solid rgba(255,255,255,0.04);"
+        with (
+            ui.row()
+            .classes("w-full px-5 py-2 gap-0")
+            .style(
+                "background:rgba(255,255,255,0.02); border-bottom:1px solid rgba(255,255,255,0.04);"
+            )
         ):
             ui.label("Field").style(_LABEL + " flex:0 0 140px;")
             ui.label("This record").style(_LABEL + " flex:1;")
@@ -565,14 +650,16 @@ def _open_merge_dialog(current_row: dict, matched_db_id: int) -> None:
                 pc = primary_conf.get(key, 0.0)
                 mc = matched_conf.get(key, 0.0)
 
-                _SEL   = "border:1px solid rgba(99,102,241,0.5); background:rgba(99,102,241,0.08); border-radius:8px; cursor:pointer;"
+                _SEL = "border:1px solid rgba(99,102,241,0.5); background:rgba(99,102,241,0.08); border-radius:8px; cursor:pointer;"
                 _UNSEL = "border:1px solid transparent; background:transparent; border-radius:8px; cursor:pointer; opacity:0.55;"
 
                 p_init = _SEL if selections[key] == "primary" else _UNSEL
                 m_init = _SEL if selections[key] == "matched" else _UNSEL
 
-                with ui.row().classes("w-full items-start px-5 py-2 gap-0").style(
-                    "border-bottom:1px solid rgba(255,255,255,0.03);"
+                with (
+                    ui.row()
+                    .classes("w-full items-start px-5 py-2 gap-0")
+                    .style("border-bottom:1px solid rgba(255,255,255,0.03);")
                 ):
                     ui.label(label).style(
                         "font-size:11px; color:#64748b; font-family:Inter,sans-serif;"
@@ -583,8 +670,8 @@ def _open_merge_dialog(current_row: dict, matched_db_id: int) -> None:
                     with p_cell:
                         ui.html(
                             f'<span style="font-size:13px; color:#e2e8f0; font-family:Inter,sans-serif;">'
-                            f'{pv or "<em style=\'color:#334155\'>empty</em>"}</span>'
-                            + (f' {_conf_badge(pc)}' if pv else '')
+                            f"{pv or "<em style='color:#334155'>empty</em>"}</span>"
+                            + (f" {_conf_badge(pc)}" if pv else "")
                         )
 
                     ui.element("div").style("flex:0 0 8px;")
@@ -593,8 +680,8 @@ def _open_merge_dialog(current_row: dict, matched_db_id: int) -> None:
                     with m_cell:
                         ui.html(
                             f'<span style="font-size:13px; color:#e2e8f0; font-family:Inter,sans-serif;">'
-                            f'{mv or "<em style=\'color:#334155\'>empty</em>"}</span>'
-                            + (f' {_conf_badge(mc)}' if mv else '')
+                            f"{mv or "<em style='color:#334155'>empty</em>"}</span>"
+                            + (f" {_conf_badge(mc)}" if mv else "")
                         )
 
                     cell_states[key] = {"p": p_cell, "m": m_cell}
@@ -614,12 +701,14 @@ def _open_merge_dialog(current_row: dict, matched_db_id: int) -> None:
                     m_cell.on("click", _select_matched)
 
         # Footer
-        with ui.row().classes("w-full items-center justify-between px-5 py-4").style(
-            "border-top:1px solid rgba(255,255,255,0.06);"
+        with (
+            ui.row()
+            .classes("w-full items-center justify-between px-5 py-4")
+            .style("border-top:1px solid rgba(255,255,255,0.06);")
         ):
-            ui.label(
-                f"This record · {primary_rec.get('original_filename', '')}"
-            ).style("font-size:11px; color:#334155; font-family:Inter,sans-serif; flex:1;")
+            ui.label(f"This record · {primary_rec.get('original_filename', '')}").style(
+                "font-size:11px; color:#334155; font-family:Inter,sans-serif; flex:1;"
+            )
 
             with ui.row().classes("gap-3"):
                 ui.button("Cancel", on_click=dlg.close).props("flat").style(
@@ -629,7 +718,9 @@ def _open_merge_dialog(current_row: dict, matched_db_id: int) -> None:
                 def _do_merge():
                     merged = {}
                     for key, _ in FIELDS:
-                        rec = primary_rec if selections[key] == "primary" else matched_rec
+                        rec = (
+                            primary_rec if selections[key] == "primary" else matched_rec
+                        )
                         merged[key] = (rec.get(key) or "").strip() or None
 
                     merge_extractions(primary_id, matched_db_id, merged)
@@ -642,18 +733,24 @@ def _open_merge_dialog(current_row: dict, matched_db_id: int) -> None:
                             r["_status"] = "warn"
                             r["_dupe_of"] = ""
                             r["_dupe_id"] = None
-                    row_data[:] = [r for r in row_data if r.get("db_id") != matched_db_id]
+                    row_data[:] = [
+                        r for r in row_data if r.get("db_id") != matched_db_id
+                    ]
 
                     reapply_source_filter()
 
                     dlg.close()
                     if review_drawer:
                         review_drawer.hide()
-                    ui.notify("Records merged into one verified product.", type="positive", position="center")
+                    ui.notify(
+                        "Records merged into one verified product.",
+                        type="positive",
+                        position="center",
+                    )
 
-                ui.button("Merge into one record", icon="merge", on_click=_do_merge).props(
-                    "unelevated"
-                ).style(
+                ui.button(
+                    "Merge into one record", icon="merge", on_click=_do_merge
+                ).props("unelevated").style(
                     "background:#6366f1; color:#fff; font-family:Inter,sans-serif;"
                     "font-size:13px; font-weight:600; border-radius:8px; padding:6px 18px;"
                 )
@@ -695,7 +792,9 @@ def open_review_drawer(row: dict):
                 if len(urls) > 1:
                     with (
                         ui.carousel(
-                            animated=True, arrows=True, navigation=True,
+                            animated=True,
+                            arrows=True,
+                            navigation=True,
                             value="slide-0",
                             on_value_change=_on_slide_change,
                         )
@@ -719,15 +818,20 @@ def open_review_drawer(row: dict):
 
                 # ── Single delete button, only shown when removals are possible
                 if len(paths) > 1:
-                    with ui.row().classes("w-full items-center justify-end px-4 py-2").style(
-                        "border-top:1px solid rgba(255,255,255,0.05);"
-                        "background:#060a12;"
+                    with (
+                        ui.row()
+                        .classes("w-full items-center justify-end px-4 py-2")
+                        .style(
+                            "border-top:1px solid rgba(255,255,255,0.05);"
+                            "background:#060a12;"
+                        )
                     ):
                         ui.label(f"{len(paths)} images").style(
                             "font-size:11px; color:#334155; font-family:Inter,sans-serif; flex:1"
                         )
                         ui.button(
-                            "Delete this image", icon="delete_outline",
+                            "Delete this image",
+                            icon="delete_outline",
                             on_click=delete_current_image,
                         ).props("flat dense").style(
                             "font-size:11px; color:rgba(239,68,68,0.65);"
@@ -747,16 +851,30 @@ def open_review_drawer(row: dict):
             )
             if video_url:
                 with review_carousel_container:
-                    with ui.row().classes("w-full px-4 py-3").style(
-                        "border-top:1px solid rgba(255,255,255,0.05); background:#060a12;"
+                    with (
+                        ui.row()
+                        .classes("w-full px-4 py-3")
+                        .style(
+                            "border-top:1px solid rgba(255,255,255,0.05); background:#060a12;"
+                        )
                     ):
+
                         def _open_video_modal(url=video_url):
-                            with ui.dialog() as dlg, ui.card().style(
-                                "background:#0d1117; border:1px solid rgba(255,255,255,0.08);"
-                                "border-radius:14px; padding:0; overflow:hidden; min-width:520px;"
+                            with (
+                                ui.dialog() as dlg,
+                                ui.card().style(
+                                    "background:#0d1117; border:1px solid rgba(255,255,255,0.08);"
+                                    "border-radius:14px; padding:0; overflow:hidden; min-width:520px;"
+                                ),
                             ):
-                                with ui.row().classes("w-full items-center justify-between px-4 py-3").style(
-                                    "border-bottom:1px solid rgba(255,255,255,0.06);"
+                                with (
+                                    ui.row()
+                                    .classes(
+                                        "w-full items-center justify-between px-4 py-3"
+                                    )
+                                    .style(
+                                        "border-bottom:1px solid rgba(255,255,255,0.06);"
+                                    )
                                 ):
                                     ui.label("Source video").style(
                                         "font-size:13px; font-weight:600; color:#e2e8f0;"
@@ -771,13 +889,14 @@ def open_review_drawer(row: dict):
                                     f'<video controls autoplay preload="auto"'
                                     f' style="max-width:100%; max-height:420px;">'
                                     f'<source src="{url}">'
-                                    f'</video>'
-                                    f'</div>'
+                                    f"</video>"
+                                    f"</div>"
                                 )
                             dlg.open()
 
                         ui.button(
-                            "View video", icon="play_circle_outline",
+                            "View video",
+                            icon="play_circle_outline",
                             on_click=_open_video_modal,
                         ).props("flat dense").style(
                             "font-size:12px; font-weight:500; color:#818cf8;"
@@ -792,14 +911,16 @@ def open_review_drawer(row: dict):
         audit = row.get("_barcode_audit")
         if audit and audit.get("decision") != "none":
             _DECISION_LABELS = {
-                "both_agree":              "Both sources agree",
-                "pipeline_wins":           "Pixel scan wins (VLM failed checksum)",
-                "vlm_wins":                "VLM read wins (scan failed checksum)",
+                "both_agree": "Both sources agree",
+                "pipeline_wins": "Pixel scan wins (VLM failed checksum)",
+                "vlm_wins": "VLM read wins (scan failed checksum)",
                 "both_valid_pipeline_primary": "Both valid -- scan preferred",
-                "pipeline_only":           "Scan only (no VLM digit read)",
-                "vlm_only":                "VLM only (scan found nothing)",
+                "pipeline_only": "Scan only (no VLM digit read)",
+                "vlm_only": "VLM only (scan found nothing)",
             }
-            decision_label = _DECISION_LABELS.get(audit.get("decision", ""), audit.get("decision", ""))
+            decision_label = _DECISION_LABELS.get(
+                audit.get("decision", ""), audit.get("decision", "")
+            )
 
             def _check_icon(ok: bool | None) -> str:
                 if ok is True:
@@ -812,38 +933,44 @@ def open_review_drawer(row: dict):
             vlm_val = audit.get("vlm") or "--"
 
             with review_carousel_container:
-                with ui.expansion("Barcode source").classes("w-full").style(
-                    "border-top:1px solid rgba(255,255,255,0.05);"
-                    "background:#060a12; color:#94a3b8;"
-                    "font-size:12px; font-family:Inter,sans-serif;"
+                with (
+                    ui.expansion("Barcode source")
+                    .classes("w-full")
+                    .style(
+                        "border-top:1px solid rgba(255,255,255,0.05);"
+                        "background:#060a12; color:#94a3b8;"
+                        "font-size:12px; font-family:Inter,sans-serif;"
+                    )
                 ):
-                    with ui.column().classes("w-full gap-1").style("padding:8px 6px 6px"):
+                    with (
+                        ui.column().classes("w-full gap-1").style("padding:8px 6px 6px")
+                    ):
                         for label, val, chk in [
                             ("Pixel scan", pip_val, audit.get("pipeline_checksum")),
-                            ("VLM text",   vlm_val, audit.get("vlm_checksum")),
+                            ("VLM text", vlm_val, audit.get("vlm_checksum")),
                         ]:
                             ui.html(
                                 f'<div style="display:flex; align-items:center;'
                                 f' gap:8px; width:100%; padding:4px 0;">'
                                 f'<span style="color:#475569; font-size:10px;'
-                                f' font-family:Inter,sans-serif; width:64px; flex-shrink:0;'
+                                f" font-family:Inter,sans-serif; width:64px; flex-shrink:0;"
                                 f' text-transform:uppercase; letter-spacing:0.4px;">{label}</span>'
                                 f'<span style="color:#cbd5e1; font-size:12px;'
-                                f' font-family:DM Mono,monospace; font-weight:500;'
+                                f" font-family:DM Mono,monospace; font-weight:500;"
                                 f' flex:1; letter-spacing:0.5px;">{val}</span>'
-                                f'{_check_icon(chk)}'
-                                f'</div>'
+                                f"{_check_icon(chk)}"
+                                f"</div>"
                             )
                         ui.html(
                             f'<div style="margin-top:6px; padding-top:6px;'
-                            f' border-top:1px solid rgba(255,255,255,0.05);'
+                            f" border-top:1px solid rgba(255,255,255,0.05);"
                             f' display:flex; align-items:center; gap:6px;">'
                             f'<span style="color:#475569; font-size:10px;'
-                            f' font-family:Inter,sans-serif; text-transform:uppercase;'
+                            f" font-family:Inter,sans-serif; text-transform:uppercase;"
                             f' letter-spacing:0.4px; flex-shrink:0;">Decision</span>'
                             f'<span style="color:#818cf8; font-size:11px;'
                             f' font-family:Inter,sans-serif; font-weight:600;">{decision_label}</span>'
-                            f'</div>'
+                            f"</div>"
                         )
 
     # ── Known brand hint ──────────────────────────────────────────────────────
@@ -851,6 +978,7 @@ def open_review_drawer(row: dict):
         brand_val = row.get("brand", "").strip()
         if brand_val:
             from backend.db import get_brand_profile
+
             profile = get_brand_profile(brand_val)
             if profile and profile.get("product_count", 0) > 1:
                 parts = []
@@ -863,19 +991,28 @@ def open_review_drawer(row: dict):
                 count = profile["product_count"]
                 detail = " · ".join(parts) if parts else ""
                 with review_carousel_container:
-                    with ui.row().classes("w-full items-center gap-2 px-4 py-2").style(
-                        "border-top:1px solid rgba(255,255,255,0.05);"
-                        "background:rgba(99,102,241,0.05);"
+                    with (
+                        ui.row()
+                        .classes("w-full items-center gap-2 px-4 py-2")
+                        .style(
+                            "border-top:1px solid rgba(255,255,255,0.05);"
+                            "background:rgba(99,102,241,0.05);"
+                        )
                     ):
-                        ui.icon("auto_awesome", size="0.9rem").style("color:#818cf8; flex-shrink:0")
+                        ui.icon("auto_awesome", size="0.9rem").style(
+                            "color:#818cf8; flex-shrink:0"
+                        )
                         ui.html(
                             f'<span style="color:#818cf8; font-size:11px; font-weight:600;'
                             f' font-family:Inter,sans-serif;">Known brand</span>'
                             f'<span style="color:#475569; font-size:11px;'
                             f' font-family:Inter,sans-serif;"> &nbsp;·&nbsp; seen {count}x</span>'
-                            + (f'<span style="color:#64748b; font-size:11px;'
-                               f' font-family:Inter,sans-serif;"> &nbsp;·&nbsp; {detail}</span>'
-                               if detail else "")
+                            + (
+                                f'<span style="color:#64748b; font-size:11px;'
+                                f' font-family:Inter,sans-serif;"> &nbsp;·&nbsp; {detail}</span>'
+                                if detail
+                                else ""
+                            )
                         )
 
     # ── Duplicate banner + resolve button ────────────────────────────────────
@@ -884,21 +1021,27 @@ def open_review_drawer(row: dict):
         dupe_id = row.get("_dupe_id")
         if dupe_of and row.get("_status") == "duplicate":
             with review_carousel_container:
-                with ui.row().classes("w-full items-center justify-between").style(
-                    "background:rgba(239,68,68,0.07); border-left:3px solid #ef4444;"
-                    "padding:10px 16px; margin:0; gap:8px;"
+                with (
+                    ui.row()
+                    .classes("w-full items-center justify-between")
+                    .style(
+                        "background:rgba(239,68,68,0.07); border-left:3px solid #ef4444;"
+                        "padding:10px 16px; margin:0; gap:8px;"
+                    )
                 ):
                     with ui.column().classes("gap-0 flex-1"):
                         ui.html(
                             '<p style="margin:0;font-size:11px;font-weight:600;color:#ef4444;'
-                            'font-family:Inter,sans-serif;letter-spacing:0.3px;'
+                            "font-family:Inter,sans-serif;letter-spacing:0.3px;"
                             'text-transform:uppercase;margin-bottom:3px">Potential duplicate</p>'
                             f'<p style="margin:0;font-size:12px;color:#94a3b8;'
                             f'font-family:Inter,sans-serif;line-height:1.5">{dupe_of}</p>'
                         )
                     if dupe_id:
+
                         def _open_merge(current=row, matched_db_id=dupe_id):
                             _open_merge_dialog(current, matched_db_id)
+
                         ui.button("Resolve", icon="merge", on_click=_open_merge).props(
                             "dense unelevated"
                         ).style(
@@ -966,7 +1109,6 @@ def save_review_drawer():
         return
 
 
-
 async def delete_from_review_drawer():
     """Remove the current row from state, the grid, and the database."""
     global review_row_id
@@ -979,9 +1121,9 @@ async def delete_from_review_drawer():
 
     with ui.dialog() as dialog, ui.card().classes("p-6 gap-4"):
         ui.label("Delete this record?").classes("text-sm font-medium")
-        ui.label(
-            row_to_delete.get("product_name") or "This product"
-        ).classes("text-xs text-slate-400")
+        ui.label(row_to_delete.get("product_name") or "This product").classes(
+            "text-xs text-slate-400"
+        )
         with ui.row().classes("justify-end gap-2 w-full pt-2"):
             ui.button("Cancel", on_click=lambda: dialog.submit(False)).props(
                 "flat color=white"
@@ -1004,6 +1146,7 @@ async def delete_from_review_drawer():
 
 
 # ── Upload zone ──────────────────────────────────────────────────────────────
+
 
 def render_upload_zone():
     """Two-level pill navigation upload zone.
@@ -1028,7 +1171,7 @@ def render_upload_zone():
         "border:1px solid; border-radius:20px; user-select:none;"
     )
     # Outer pills are slightly larger -- they represent the primary choice.
-    _O_ON  = _BASE + (
+    _O_ON = _BASE + (
         "padding:5px 16px; font-size:12px; font-weight:600;"
         "background:rgba(99,102,241,0.15); color:#a5b4fc;"
         "border-color:rgba(99,102,241,0.35);"
@@ -1038,7 +1181,7 @@ def render_upload_zone():
         "background:transparent; color:#475569; border-color:transparent;"
     )
     # Inner pills are smaller -- secondary choice inside the active outer.
-    _I_ON  = _BASE + (
+    _I_ON = _BASE + (
         "padding:4px 12px; font-size:11px; font-weight:500;"
         "background:rgba(99,102,241,0.15); color:#a5b4fc;"
         "border-color:rgba(99,102,241,0.35);"
@@ -1049,10 +1192,11 @@ def render_upload_zone():
     )
 
     with ui.column().classes("w-full gap-0"):
-
         # ── Header: outer pills on the left, model selector on the right ─────
-        with ui.row().classes("w-full items-center justify-between pb-2").style(
-            "border-bottom:1px solid rgba(240,225,205,0.07)"
+        with (
+            ui.row()
+            .classes("w-full items-center justify-between pb-2")
+            .style("border-bottom:1px solid rgba(240,225,205,0.07)")
         ):
             with ui.row().classes("items-center gap-1"):
                 outer_img = ui.label("Image").style(_O_ON)
@@ -1064,17 +1208,22 @@ def render_upload_zone():
                     list(MODEL_OPTIONS.keys()),
                     value=get_client_model(),
                     on_change=lambda e: set_client_model(e.value),
-                ).props("dense dark outlined").classes("model-selector").style("font-size:11px; min-width:160px")
+                ).props("dense dark outlined").classes("model-selector").style(
+                    "font-size:11px; min-width:160px"
+                )
                 with ui.element("div").style("position:relative"):
                     info_btn = ui.icon("info_outline", size="1rem").style(
                         "color:#475569; cursor:pointer; margin-top:2px"
                     )
-                    with ui.menu().props(
-                        "anchor='bottom right' self='top right' auto-close"
-                    ).classes("shadow-xl").style(
-                        "background:#1e1c19; border:1px solid rgba(240,225,205,0.09);"
-                        "border-radius:10px; padding:14px 16px; width:340px"
-                    ) as pricing_menu:
+                    with (
+                        ui.menu()
+                        .props("anchor='bottom right' self='top right' auto-close")
+                        .classes("shadow-xl")
+                        .style(
+                            "background:#1e1c19; border:1px solid rgba(240,225,205,0.09);"
+                            "border-radius:10px; padding:14px 16px; width:340px"
+                        ) as pricing_menu
+                    ):
                         ui.html("""
                             <p style="font-size:12px;font-weight:700;color:#f0ebe5;
                                font-family:Inter,sans-serif;margin:0 0 10px 0">
@@ -1119,7 +1268,9 @@ def render_upload_zone():
             # Inner pills
             with ui.row().classes("items-center gap-1 pt-2 pb-1"):
                 img_quick_pill = ui.label("Quick Upload").style(_I_ON)
-                img_batch_pill = ui.label("Batch").style(_I_OFF).classes("bulk-batch-tab")
+                img_batch_pill = (
+                    ui.label("Batch").style(_I_OFF).classes("bulk-batch-tab")
+                )
 
             # Content panels -- only one visible at a time
             img_quick_panel = ui.column().classes("w-full pt-2")
@@ -1153,32 +1304,38 @@ def render_upload_zone():
         # ── Toggle callbacks (closures -- all UI elements are defined above) ──
 
         def _show_image():
-            outer_img.style(_O_ON);  outer_vid.style(_O_OFF)
+            outer_img.style(_O_ON)
+            outer_vid.style(_O_OFF)
             image_panel.set_visibility(True)
             video_panel.set_visibility(False)
 
         def _show_video():
-            outer_img.style(_O_OFF); outer_vid.style(_O_ON)
+            outer_img.style(_O_OFF)
+            outer_vid.style(_O_ON)
             image_panel.set_visibility(False)
             video_panel.set_visibility(True)
 
         def _show_img_quick():
-            img_quick_pill.style(_I_ON);  img_batch_pill.style(_I_OFF)
+            img_quick_pill.style(_I_ON)
+            img_batch_pill.style(_I_OFF)
             img_quick_panel.set_visibility(True)
             img_batch_panel.set_visibility(False)
 
         def _show_img_batch():
-            img_quick_pill.style(_I_OFF); img_batch_pill.style(_I_ON)
+            img_quick_pill.style(_I_OFF)
+            img_batch_pill.style(_I_ON)
             img_quick_panel.set_visibility(False)
             img_batch_panel.set_visibility(True)
 
         def _show_vid_quick():
-            vid_quick_pill.style(_I_ON);  vid_batch_pill.style(_I_OFF)
+            vid_quick_pill.style(_I_ON)
+            vid_batch_pill.style(_I_OFF)
             vid_quick_panel.set_visibility(True)
             vid_batch_panel.set_visibility(False)
 
         def _show_vid_batch():
-            vid_quick_pill.style(_I_OFF); vid_batch_pill.style(_I_ON)
+            vid_quick_pill.style(_I_OFF)
+            vid_batch_pill.style(_I_ON)
             vid_quick_panel.set_visibility(False)
             vid_batch_panel.set_visibility(True)
 
@@ -1192,11 +1349,17 @@ def render_upload_zone():
 
 def _render_quick_tab() -> None:
     """Original instant-processing upload zone, capped at QUICK_UPLOAD_LIMIT images."""
-    with ui.element("div").classes("upload-zone w-full").style(
-        "position:relative; min-height:190px"
+    with (
+        ui.element("div")
+        .classes("upload-zone w-full")
+        .style("position:relative; min-height:190px")
     ):
-        with ui.column().classes("items-center justify-center gap-3").style(
-            "position:absolute; inset:0; pointer-events:none; padding:36px 20px; z-index:5"
+        with (
+            ui.column()
+            .classes("items-center justify-center gap-3")
+            .style(
+                "position:absolute; inset:0; pointer-events:none; padding:36px 20px; z-index:5"
+            )
         ):
             ui.icon("cloud_upload", size="2rem").style("color:rgba(99,102,241,0.5)")
             with ui.column().classes("items-center gap-1"):
@@ -1217,14 +1380,17 @@ def _render_quick_tab() -> None:
                     "color:#818cf8; font-family:Inter,sans-serif; font-size:12px"
                 )
 
-        _qup = ui.upload(
-            multiple=True,
-            on_multi_upload=handle_batch_upload,
-            auto_upload=True,
-        ).props('accept=".jpg,.jpeg,.png,.webp" flat label=""').classes(
-            "upload-zone-cover"
+        _qup = (
+            ui.upload(
+                multiple=True,
+                on_multi_upload=handle_batch_upload,
+                auto_upload=True,
+            )
+            .props('accept=".jpg,.jpeg,.png,.webp" flat label=""')
+            .classes("upload-zone-cover")
         )
         from frontend.state import set_quick_upload
+
         set_quick_upload(_qup)
 
 
@@ -1238,8 +1404,8 @@ def _render_multiview_tab(user: dict | None) -> None:
     from pathlib import Path as _Path
 
     _MAX_VIDEOS = 5
-    _MAX_MB     = 100
-    _MAX_BYTES  = _MAX_MB * 1024 * 1024
+    _MAX_MB = 100
+    _MAX_BYTES = _MAX_MB * 1024 * 1024
 
     # ── Pipeline helper ──────────────────────────────────────────────────────────
 
@@ -1247,7 +1413,10 @@ def _render_multiview_tab(user: dict | None) -> None:
         """Extract frames, run multi-view pipeline, append row to grid.  Returns True on success."""
         from backend.db import create_extraction
         from backend.extractor import MODEL_OPTIONS, extract_from_frames
-        from backend.video_processor import extract_frames_from_video_async, select_best_frames_async
+        from backend.video_processor import (
+            extract_frames_from_video_async,
+            select_best_frames_async,
+        )
         from frontend.state import get_grid, result_to_row, row_data
 
         name_hint = _Path(original_name).stem.replace("_", " ")
@@ -1271,8 +1440,11 @@ def _render_multiview_tab(user: dict | None) -> None:
 
         from backend.db import list_user_extractions
         from backend.normalizer import check_duplicate
+
         existing_records = list_user_extractions(user["id"])
-        result.duplicate_suggestions = check_duplicate(result.record, existing_records=existing_records)
+        result.duplicate_suggestions = check_duplicate(
+            result.record, existing_records=existing_records
+        )
 
         extraction_id = create_extraction(
             user_id=user["id"],
@@ -1297,18 +1469,25 @@ def _render_multiview_tab(user: dict | None) -> None:
 
     async def _on_videos_staged(e: events.MultiUploadEventArguments) -> None:
         from uuid import uuid4
+
         upload_dir = _Path("data/uploads")
         upload_dir.mkdir(parents=True, exist_ok=True)
         for file in e.files:
             if len(staged) >= _MAX_VIDEOS:
-                ui.notify(f"Maximum {_MAX_VIDEOS} videos allowed.", type="warning", position="center")
+                ui.notify(
+                    f"Maximum {_MAX_VIDEOS} videos allowed.",
+                    type="warning",
+                    position="center",
+                )
                 break
             file_size = file.size()
             if file_size > _MAX_BYTES:
                 ui.notify(
                     f"{file.name} is too large ({file_size // (1024 * 1024)} MB). "
                     f"Limit is {_MAX_MB} MB.",
-                    type="warning", position="center", timeout=6000,
+                    type="warning",
+                    position="center",
+                    timeout=6000,
                 )
                 continue
             suffix = _Path(file.name).suffix or ".mp4"
@@ -1330,7 +1509,9 @@ def _render_multiview_tab(user: dict | None) -> None:
 
     async def _on_upload_submit() -> None:
         if not staged:
-            ui.notify("Upload at least one video first.", type="warning", position="center")
+            ui.notify(
+                "Upload at least one video first.", type="warning", position="center"
+            )
             return
         if not user:
             ui.notify("Please log in.", type="warning", position="center")
@@ -1349,12 +1530,14 @@ def _render_multiview_tab(user: dict | None) -> None:
             if any(r.has_duplicates for r in results):
                 ui.notify(
                     f"Possible duplicate detected in {len(results)} product{'s' if len(results) != 1 else ''}",
-                    type="warning", position="center",
+                    type="warning",
+                    position="center",
                 )
             else:
                 ui.notify(
                     f"{len(results)} product{'s' if len(results) != 1 else ''} extracted",
-                    type="positive", position="center",
+                    type="positive",
+                    position="center",
                 )
         for msg in errors:
             ui.notify(msg, type="negative", position="center", timeout=8000)
@@ -1363,11 +1546,17 @@ def _render_multiview_tab(user: dict | None) -> None:
     # ── UI ───────────────────────────────────────────────────────────────────────
 
     with ui.column().classes("w-full gap-3 pt-1"):
-        with ui.element("div").classes("upload-zone w-full").style(
-            "position:relative; min-height:160px"
+        with (
+            ui.element("div")
+            .classes("upload-zone w-full")
+            .style("position:relative; min-height:160px")
         ):
-            upload_hint = ui.column().classes("items-center justify-center gap-2").style(
-                "position:absolute; inset:0; pointer-events:none; padding:28px 20px; z-index:5"
+            upload_hint = (
+                ui.column()
+                .classes("items-center justify-center gap-2")
+                .style(
+                    "position:absolute; inset:0; pointer-events:none; padding:28px 20px; z-index:5"
+                )
             )
             with upload_hint:
                 ui.icon("videocam", size="2rem").style("color:rgba(99,102,241,0.5)")
@@ -1375,7 +1564,9 @@ def _render_multiview_tab(user: dict | None) -> None:
                     "color:#64748b; font-size:14px; font-weight:500;"
                     "font-family:Inter,sans-serif; letter-spacing:-0.1px; text-align:center"
                 )
-                ui.label("Up to 5 videos · 100 MB max per video · one product per video").style(
+                ui.label(
+                    "Up to 5 videos · 100 MB max per video · one product per video"
+                ).style(
                     "color:#263344; font-size:12px; font-family:Inter,sans-serif; text-align:center"
                 )
                 with ui.element("div").style(
@@ -1386,8 +1577,12 @@ def _render_multiview_tab(user: dict | None) -> None:
                         "color:#818cf8; font-family:Inter,sans-serif; font-size:12px; font-weight:500"
                     )
 
-            upload_staged = ui.column().classes("items-center justify-center gap-2").style(
-                "position:absolute; inset:0; pointer-events:none; padding:28px 20px; z-index:5"
+            upload_staged = (
+                ui.column()
+                .classes("items-center justify-center gap-2")
+                .style(
+                    "position:absolute; inset:0; pointer-events:none; padding:28px 20px; z-index:5"
+                )
             )
             upload_staged.set_visibility(False)
             with upload_staged:
@@ -1400,17 +1595,25 @@ def _render_multiview_tab(user: dict | None) -> None:
                 )
 
             ui.upload(
-                multiple=True, auto_upload=True, on_multi_upload=_on_videos_staged,
-            ).props('accept=".mp4,.mov,.avi,.webm,.mkv" flat label=""').classes("upload-zone-cover")
+                multiple=True,
+                auto_upload=True,
+                on_multi_upload=_on_videos_staged,
+            ).props('accept=".mp4,.mov,.avi,.webm,.mkv" flat label=""').classes(
+                "upload-zone-cover"
+            )
 
         with ui.row().classes("w-full items-center justify-between pt-1"):
             ui.button("Clear", icon="clear_all", on_click=_upload_clear).props(
                 "flat dense color=grey-6"
             ).classes("text-xs")
-            upload_submit_btn = ui.button(
-                "Process Videos", icon="auto_awesome", on_click=_on_upload_submit,
-            ).props("unelevated color=indigo-5").style(
-                "font-size:13px; font-weight:600; padding:0 20px; height:38px"
+            upload_submit_btn = (
+                ui.button(
+                    "Process Videos",
+                    icon="auto_awesome",
+                    on_click=_on_upload_submit,
+                )
+                .props("unelevated color=indigo-5")
+                .style("font-size:13px; font-weight:600; padding:0 20px; height:38px")
             )
             upload_submit_btn.set_enabled(False)
 
@@ -1427,8 +1630,8 @@ def _render_video_batch_tab(user: dict | None) -> None:
     from pathlib import Path as _Path
 
     _MAX_VIDEOS = 50
-    _MAX_MB     = 100
-    _MAX_BYTES  = _MAX_MB * 1024 * 1024
+    _MAX_MB = 100
+    _MAX_BYTES = _MAX_MB * 1024 * 1024
 
     staged: list[_Path] = []
     counters = {"skipped": 0}
@@ -1437,12 +1640,15 @@ def _render_video_batch_tab(user: dict | None) -> None:
 
     async def _on_staged(e: events.MultiUploadEventArguments) -> None:
         from uuid import uuid4
+
         upload_dir = _Path("data/uploads")
         upload_dir.mkdir(parents=True, exist_ok=True)
         for file in e.files:
             if len(staged) >= _MAX_VIDEOS:
                 ui.notify(
-                    f"Maximum {_MAX_VIDEOS} videos per batch.", type="warning", position="center"
+                    f"Maximum {_MAX_VIDEOS} videos per batch.",
+                    type="warning",
+                    position="center",
                 )
                 break
             suffix = _Path(file.name).suffix.lower()
@@ -1454,7 +1660,9 @@ def _render_video_batch_tab(user: dict | None) -> None:
                 ui.notify(
                     f"{file.name} is too large ({file_size // (1024 * 1024)} MB). "
                     f"Limit is {_MAX_MB} MB.",
-                    type="warning", position="center", timeout=6000,
+                    type="warning",
+                    position="center",
+                    timeout=6000,
                 )
                 counters["skipped"] += 1
                 continue
@@ -1462,14 +1670,16 @@ def _render_video_batch_tab(user: dict | None) -> None:
             await file.save(dest)
             staged.append(dest)
 
-        n  = len(staged)
+        n = len(staged)
         sk = counters["skipped"]
         skip_txt = f" · {sk} file{'s' if sk != 1 else ''} skipped" if sk else ""
         count_label.set_text(f"{n} video{'s' if n != 1 else ''} ready{skip_txt}")
         start_btn.set_text(f"Submit Batch · {n} video{'s' if n != 1 else ''}")
 
         hint_empty.set_visibility(False)
-        staged_hint_label.set_text(f"{n} video{'s' if n != 1 else ''} staged. Drop more to add.")
+        staged_hint_label.set_text(
+            f"{n} video{'s' if n != 1 else ''} staged. Drop more to add."
+        )
         hint_staged.set_visibility(True)
         staging_area.set_visibility(True)
 
@@ -1488,15 +1698,21 @@ def _render_video_batch_tab(user: dict | None) -> None:
         if not email:
             ui.notify(
                 "Please enter an email address so we can notify you when results are ready.",
-                type="warning", position="center",
+                type="warning",
+                position="center",
             )
             return
 
         # Confirmation dialog matching the image batch style.
-        with ui.dialog() as dlg, ui.card().classes("p-6 gap-4").style(
-            "min-width:380px; max-width:480px;"
-            "background:#1e1c19; border:1px solid rgba(99,102,241,0.25);"
-            "border-radius:12px;"
+        with (
+            ui.dialog() as dlg,
+            ui.card()
+            .classes("p-6 gap-4")
+            .style(
+                "min-width:380px; max-width:480px;"
+                "background:#1e1c19; border:1px solid rgba(99,102,241,0.25);"
+                "border-radius:12px;"
+            ),
         ):
             ui.label("Confirm video batch").classes("text-base font-semibold").style(
                 "color:#f0ebe5"
@@ -1512,7 +1728,9 @@ def _render_video_batch_tab(user: dict | None) -> None:
                         ui.icon("chevron_right", size="1rem").style(
                             "color:#6366f1; margin-top:1px; flex-shrink:0"
                         )
-                        ui.label(line).style("color:#94a3b8; font-size:13px; line-height:1.5")
+                        ui.label(line).style(
+                            "color:#94a3b8; font-size:13px; line-height:1.5"
+                        )
             with ui.row().classes("justify-end gap-2 w-full pt-2"):
                 ui.button("Cancel", on_click=lambda: dlg.submit(False)).props(
                     "flat color=white"
@@ -1525,11 +1743,14 @@ def _render_video_batch_tab(user: dict | None) -> None:
         if not await dlg:
             return
 
-        show_processing(f"Queuing {n} video{'s' if n != 1 else ''} for batch extraction…")
+        show_processing(
+            f"Queuing {n} video{'s' if n != 1 else ''} for batch extraction…"
+        )
         batch_error: Exception | None = None
         try:
             from backend.batch_processor import submit_video_batch
             from frontend.state import get_client_model
+
             await submit_video_batch(
                 paths=list(staged),
                 notify_email=email,
@@ -1542,29 +1763,44 @@ def _render_video_batch_tab(user: dict | None) -> None:
             hide_processing()
 
         if batch_error is not None:
-            ui.notify(f"Failed to queue batch: {batch_error}", type="negative", position="center")
+            ui.notify(
+                f"Failed to queue batch: {batch_error}",
+                type="negative",
+                position="center",
+            )
             return
 
         from frontend.state import refresh_batch_jobs
+
         refresh_batch_jobs()
         ui.notify(
             f"Video batch queued · {n} video{'s' if n != 1 else ''} · "
             f"results will be emailed to {email}",
-            type="positive", position="center", timeout=8000,
+            type="positive",
+            position="center",
+            timeout=8000,
         )
         _clear()
 
     # ── Drop zone ────────────────────────────────────────────────────────────────
 
-    with ui.element("div").classes("upload-zone w-full").style(
-        "position:relative; min-height:190px"
+    with (
+        ui.element("div")
+        .classes("upload-zone w-full")
+        .style("position:relative; min-height:190px")
     ):
-        with ui.column().classes("items-center justify-center gap-3").style(
-            "position:absolute; inset:0; pointer-events:none; padding:36px 20px; z-index:5"
+        with (
+            ui.column()
+            .classes("items-center justify-center gap-3")
+            .style(
+                "position:absolute; inset:0; pointer-events:none; padding:36px 20px; z-index:5"
+            )
         ):
             hint_empty = ui.column().classes("items-center gap-2")
             with hint_empty:
-                ui.icon("video_library", size="2rem").style("color:rgba(99,102,241,0.5)")
+                ui.icon("video_library", size="2rem").style(
+                    "color:rgba(99,102,241,0.5)"
+                )
                 with ui.column().classes("items-center gap-1"):
                     ui.label("Drop product videos here").style(
                         "color:#64748b; font-size:14px; font-weight:500;"
@@ -1601,7 +1837,9 @@ def _render_video_batch_tab(user: dict | None) -> None:
             multiple=True,
             auto_upload=True,
             on_multi_upload=_on_staged,
-        ).props('accept=".mp4,.mov,.avi,.webm,.mkv" flat label=""').classes("upload-zone-cover")
+        ).props('accept=".mp4,.mov,.avi,.webm,.mkv" flat label=""').classes(
+            "upload-zone-cover"
+        )
 
     # ── Staging controls (hidden until first upload) ──────────────────────────────
 
@@ -1624,18 +1862,24 @@ def _render_video_batch_tab(user: dict | None) -> None:
             ui.label("Notify when done:").style(
                 "color:#64748b; font-size:12px; font-family:Inter,sans-serif; white-space:nowrap"
             )
-            email_input = ui.input(
-                placeholder="you@example.com",
-                value=user.get("email", "") if user else "",
-            ).classes("flex-1").style("font-size:13px")
+            email_input = (
+                ui.input(
+                    placeholder="you@example.com",
+                    value=user.get("email", "") if user else "",
+                )
+                .classes("flex-1")
+                .style("font-size:13px")
+            )
 
         with ui.row().classes("w-full justify-end"):
-            start_btn = ui.button(
-                "Submit Batch",
-                icon="rocket_launch",
-                on_click=_on_start,
-            ).props("unelevated color=indigo-5").style(
-                "font-size:13px; font-weight:600; padding:0 20px; height:38px"
+            start_btn = (
+                ui.button(
+                    "Submit Batch",
+                    icon="rocket_launch",
+                    on_click=_on_start,
+                )
+                .props("unelevated color=indigo-5")
+                .style("font-size:13px; font-weight:600; padding:0 20px; height:38px")
             )
 
 
@@ -1690,14 +1934,19 @@ def _render_bulk_tab(user: dict | None) -> None:
             )
             return
 
-        with ui.dialog() as dlg, ui.card().classes("p-6 gap-4").style(
-            "min-width:380px; max-width:480px;"
-            "background:#1e1c19; border:1px solid rgba(99,102,241,0.25);"
-            "border-radius:12px;"
+        with (
+            ui.dialog() as dlg,
+            ui.card()
+            .classes("p-6 gap-4")
+            .style(
+                "min-width:380px; max-width:480px;"
+                "background:#1e1c19; border:1px solid rgba(99,102,241,0.25);"
+                "border-radius:12px;"
+            ),
         ):
-            ui.label("Confirm batch processing").classes("text-base font-semibold").style(
-                "color:#f0ebe5"
-            )
+            ui.label("Confirm batch processing").classes(
+                "text-base font-semibold"
+            ).style("color:#f0ebe5")
             with ui.column().classes("gap-2 py-1"):
                 for line in [
                     f"{n} image{'s' if n != 1 else ''} will be submitted for extraction",
@@ -1709,7 +1958,9 @@ def _render_bulk_tab(user: dict | None) -> None:
                         ui.icon("chevron_right", size="1rem").style(
                             "color:#6366f1; margin-top:1px; flex-shrink:0"
                         )
-                        ui.label(line).style("color:#94a3b8; font-size:13px; line-height:1.5")
+                        ui.label(line).style(
+                            "color:#94a3b8; font-size:13px; line-height:1.5"
+                        )
             with ui.row().classes("justify-end gap-2 w-full pt-2"):
                 ui.button("Cancel", on_click=lambda: dlg.submit(False)).props(
                     "flat color=white"
@@ -1732,10 +1983,15 @@ def _render_bulk_tab(user: dict | None) -> None:
             hide_processing()
 
         if batch_error is not None:
-            ui.notify(f"Failed to queue batch: {batch_error}", type="negative", position="center")
+            ui.notify(
+                f"Failed to queue batch: {batch_error}",
+                type="negative",
+                position="center",
+            )
             return
 
         from frontend.state import refresh_batch_jobs
+
         refresh_batch_jobs()
         ui.notify(
             f"Batch job queued · {n} images · you'll receive results at {email}",
@@ -1746,11 +2002,17 @@ def _render_bulk_tab(user: dict | None) -> None:
         _clear()
 
     # ── Drop zone ───────────────────────────────────────────────────────────────
-    with ui.element("div").classes("upload-zone w-full").style(
-        "position:relative; min-height:190px"
+    with (
+        ui.element("div")
+        .classes("upload-zone w-full")
+        .style("position:relative; min-height:190px")
     ):
-        with ui.column().classes("items-center justify-center gap-3").style(
-            "position:absolute; inset:0; pointer-events:none; padding:36px 20px; z-index:5"
+        with (
+            ui.column()
+            .classes("items-center justify-center gap-3")
+            .style(
+                "position:absolute; inset:0; pointer-events:none; padding:36px 20px; z-index:5"
+            )
         ):
             # Empty-state hint
             hint_empty = ui.column().classes("items-center gap-2")
@@ -1821,31 +2083,43 @@ def _render_bulk_tab(user: dict | None) -> None:
                 "color:#64748b; font-size:12px; font-family:Inter,sans-serif;"
                 "white-space:nowrap"
             )
-            email_input = ui.input(
-                placeholder="you@example.com",
-                value=user.get("email", "") if user else "",
-            ).classes("flex-1").style("font-size:13px")
+            email_input = (
+                ui.input(
+                    placeholder="you@example.com",
+                    value=user.get("email", "") if user else "",
+                )
+                .classes("flex-1")
+                .style("font-size:13px")
+            )
 
         # Start button row
         with ui.row().classes("w-full justify-end"):
-            start_btn = ui.button(
-                "Start Batch Processing",
-                icon="rocket_launch",
-                on_click=_on_start,
-            ).props("unelevated color=indigo-5").style(
-                "font-size:13px; font-weight:600; padding:0 20px; height:38px"
+            start_btn = (
+                ui.button(
+                    "Start Batch Processing",
+                    icon="rocket_launch",
+                    on_click=_on_start,
+                )
+                .props("unelevated color=indigo-5")
+                .style("font-size:13px; font-weight:600; padding:0 20px; height:38px")
             )
 
 
 # ── Legend ───────────────────────────────────────────────────────────────────
+
 
 def render_legend():
     _PILL = (
         "padding:4px 12px; border-radius:20px; font-size:11px; font-weight:500;"
         "font-family:Inter,sans-serif; cursor:pointer; transition:all 0.15s; border:1px solid;"
     )
-    _ACTIVE = _PILL + "background:rgba(99,102,241,0.15); color:#a5b4fc; border-color:rgba(99,102,241,0.35);"
-    _INACTIVE = _PILL + "background:transparent; color:#334155; border-color:transparent;"
+    _ACTIVE = (
+        _PILL
+        + "background:rgba(99,102,241,0.15); color:#a5b4fc; border-color:rgba(99,102,241,0.35);"
+    )
+    _INACTIVE = (
+        _PILL + "background:transparent; color:#334155; border-color:transparent;"
+    )
 
     current = {"filter": "all"}
 
@@ -1864,7 +2138,8 @@ def render_legend():
                 elif f == "batch":
                     # batch tab shows image batch rows AND video batch rows
                     filtered = [
-                        r for r in row_data
+                        r
+                        for r in row_data
                         if r.get("_source") == "batch"
                         or (r.get("_source") == "video" and r.get("_batch_id"))
                     ]
@@ -1875,7 +2150,12 @@ def render_legend():
                     g.options["rowData"] = filtered
                     g.update()
 
-            for key, label in [("all", "All"), ("quick", "Quick Upload"), ("video", "Video"), ("batch", "Batch")]:
+            for key, label in [
+                ("all", "All"),
+                ("quick", "Quick Upload"),
+                ("video", "Video"),
+                ("batch", "Batch"),
+            ]:
                 el = ui.label(label).style(_ACTIVE if key == "all" else _INACTIVE)
                 el.on("click", lambda k=key: _set_filter(k))
                 pills[key] = el
@@ -1883,8 +2163,10 @@ def render_legend():
             set_grid_source_filter(_set_filter)
 
         # ── Status legend (right) ─────────────────────────────────────────────
-        with ui.row().classes("items-center gap-6").style(
-            "font-size:11px; color:#3d5166; font-family:'Inter',sans-serif"
+        with (
+            ui.row()
+            .classes("items-center gap-6")
+            .style("font-size:11px; color:#3d5166; font-family:'Inter',sans-serif")
         ):
             for color, label in [
                 ("#10b981", "OK"),
@@ -1902,6 +2184,7 @@ def render_legend():
 
 # ── Grid ─────────────────────────────────────────────────────────────────────
 
+
 def render_grid():
     grid = (
         ui.aggrid(
@@ -1916,9 +2199,9 @@ def render_grid():
                 "rowData": row_data,
                 "rowHeight": 54,
                 "rowClassRules": {
-                    "row-ok":     "data._status === 'ok'",
-                    "row-warn":   "data._status === 'warn'",
-                    "row-dupe":   "data._status === 'duplicate'",
+                    "row-ok": "data._status === 'ok'",
+                    "row-warn": "data._status === 'warn'",
+                    "row-dupe": "data._status === 'duplicate'",
                     "row-failed": "data._status === 'failed'",
                 },
                 "animateRows": True,
@@ -1948,19 +2231,23 @@ def render_grid():
             return
 
         if row.get("_status") == "failed":
+
             async def _show_failed_dialog():
-                with ui.dialog() as dlg, ui.card().classes("p-6 gap-0").style("min-width:340px"):
+                with (
+                    ui.dialog() as dlg,
+                    ui.card().classes("p-6 gap-0").style("min-width:340px"),
+                ):
                     ui.html(
                         '<p style="font-size:15px;font-weight:700;color:#f0ebe5;'
                         'font-family:Inter,sans-serif;letter-spacing:-0.3px;margin-bottom:8px">'
-                        'No product detected</p>'
+                        "No product detected</p>"
                     )
                     ui.html(
                         '<p style="font-size:13px;color:#52504c;font-family:Inter,sans-serif;'
                         'line-height:1.6;margin-bottom:20px">'
-                        'The AI could not extract any product information from this image. '
-                        'You can keep it in the list for reference or discard it.'
-                        '</p>'
+                        "The AI could not extract any product information from this image. "
+                        "You can keep it in the list for reference or discard it."
+                        "</p>"
                     )
                     if row.get("thumbnail"):
                         ui.image(row["thumbnail"]).style(
@@ -1971,9 +2258,9 @@ def render_grid():
                         ui.button("Keep", on_click=lambda: dlg.submit("keep")).props(
                             "flat"
                         ).style("color:#10b981;font-weight:600")
-                        ui.button("Discard", on_click=lambda: dlg.submit("discard")).props(
-                            "unelevated color=red-8"
-                        ).style("font-weight:600")
+                        ui.button(
+                            "Discard", on_click=lambda: dlg.submit("discard")
+                        ).props("unelevated color=red-8").style("font-weight:600")
 
                 result = await dlg
                 if result == "discard":
